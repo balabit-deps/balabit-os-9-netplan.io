@@ -1,0 +1,11 @@
+#!/usr/bin/make -f
+
+include /usr/share/dpkg/architecture.mk
+
+%:
+	dh $@
+
+override_dh_auto_install:
+	dh_auto_install -- LIBDIR=/usr/lib/${DEB_HOST_MULTIARCH}
+
+.PHOHY: override_dh_auto_install

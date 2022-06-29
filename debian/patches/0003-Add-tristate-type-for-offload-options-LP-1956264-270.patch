@@ -1,0 +1,534 @@
+From: Nicolas Bock <nicolas.bock@canonical.com>
+Date: Thu, 12 May 2022 01:18:36 -0600
+Subject: Add tristate type for offload options (LP: #1956264) (#270)
+MIME-Version: 1.0
+Content-Type: text/plain; charset="utf-8"
+Content-Transfer-Encoding: 8bit
+
+Closes: https://bugs.launchpad.net/netplan/+bug/1956264
+
+COMMITS:
+* Add tristate type for offload options
+* Clarify name matching issues for `networkd`
+* Fix tests for offload
+* cli: apply: properly change udev/.link offloading settings
+* Re-used existing offloading fields, they are ABI compatible
+Size:
+Both enum and gboolean reduce to integer, so they are of same size.
+Content:
+An old consumer looking at these will interpret UNSET as if it was TRUE,
+which is the kernel's default (=UNSET) value.
+* CI: quirk to add ethtool test dependency
+* tests: ethernets: link offloading validation
+* doc: be more specific with the offloading docs
+
+Co-authored-by: Lukas Märdian <slyon@ubuntu.com>
+---
+ doc/netplan.md                    | 36 ++++++++++++------------
+ netplan/cli/commands/apply.py     | 11 +++++++-
+ src/netplan.c                     | 21 +++++++++-----
+ src/networkd.c                    | 49 ++++++++++++++++++--------------
+ src/parse.c                       | 55 +++++++++++++++++++++++++++++++-----
+ src/types.c                       |  8 ++++++
+ src/types.h                       | 35 ++++++++++++++++++-----
+ tests/generator/test_ethernets.py | 34 +++++++++++++++-------
+ tests/integration/ethernets.py    | 59 +++++++++++++++++++++++++++++++++++++++
+ 9 files changed, 237 insertions(+), 71 deletions(-)
+
+diff --git a/doc/netplan.md b/doc/netplan.md
+index e9b4e92..373e05d 100644
+--- a/doc/netplan.md
++++ b/doc/netplan.md
+@@ -79,6 +79,10 @@ Virtual devices
+ 
+ ## Common properties for physical device types
+ 
++**Note:** Some options will not work reliably for devices matched by name only
++and rendered by networkd, due to interactions with device renaming in udev.
++Match devices by MAC when setting options like: ``wakeonlan`` or ``*-offload``.
++
+ ``match`` (mapping)
+ 
+ :    This selects a subset of available physical devices by various hardware
+@@ -139,54 +143,50 @@ Virtual devices
+ 
+ :    Enable wake on LAN. Off by default.
+ 
+-     **Note:** This will not work reliably for devices matched by name
+-     only and rendered by networkd, due to interactions with device
+-     renaming in udev. Match devices by MAC when setting wake on LAN.
+-
+ ``emit-lldp`` (bool) – since **0.99**
+ 
+ :    (networkd backend only) Whether to emit LLDP packets. Off by default.
+ 
+ ``receive-checksum-offload`` (bool) – since **0.104**
+ 
+-:    (networkd backend only) If set to true, the hardware offload for
+-     checksumming of ingress network packets is enabled. When unset,
++:    (networkd backend only) If set to true (false), the hardware offload for
++     checksumming of ingress network packets is enabled (disabled). When unset,
+      the kernel's default will be used.
+ 
+ ``transmit-checksum-offload`` (bool) – since **0.104**
+ 
+-:    (networkd backend only) If set to true, the hardware offload for
+-     checksumming of egress network packets is enabled. When unset,
++:    (networkd backend only) If set to true (false), the hardware offload for
++     checksumming of egress network packets is enabled (disabled). When unset,
+      the kernel's default will be used.
+ 
+ ``tcp-segmentation-offload`` (bool) – since **0.104**
+ 
+-:    (networkd backend only) If set to true, the TCP Segmentation
+-     Offload (TSO) is enabled. When unset, the kernel's default will
++:    (networkd backend only) If set to true (false), the TCP Segmentation
++     Offload (TSO) is enabled (disabled). When unset, the kernel's default will
+      be used.
+ 
+ ``tcp6-segmentation-offload`` (bool) – since **0.104**
+ 
+-:    (networkd backend only) If set to true, the TCP6 Segmentation
+-     Offload (tx-tcp6-segmentation) is enabled. When unset, the
++:    (networkd backend only) If set to true (false), the TCP6 Segmentation
++     Offload (tx-tcp6-segmentation) is enabled (disabled). When unset, the
+      kernel's default will be used.
+ 
+ ``generic-segmentation-offload`` (bool) – since **0.104**
+ 
+-:    (networkd backend only) If set to true, the Generic Segmentation
+-     Offload (GSO) is enabled. When unset, the kernel's default will
++:    (networkd backend only) If set to true (false), the Generic Segmentation
++     Offload (GSO) is enabled (disabled). When unset, the kernel's default will
+      be used.
+ 
+ ``generic-receive-offload`` (bool) – since **0.104**
+ 
+-:    (networkd backend only) If set to true, the Generic Receive
+-     Offload (GRO) is enabled. When unset, the kernel's default will
++:    (networkd backend only) If set to true (false), the Generic Receive
++     Offload (GRO) is enabled (disabled). When unset, the kernel's default will
+      be used.
+ 
+ ``large-receive-offload`` (bool) – since **0.104**
+ 
+-:    (networkd backend only) If set to true, the Generic Receive
+-     Offload (GRO) is enabled. When unset, the kernel's default will
++:    (networkd backend only) If set to true (false), the Large Receive Offload
++     (LRO) is enabled (disabled). When unset, the kernel's default will
+      be used.
+ 
+ ``openvswitch`` (mapping) – since **0.100**
+diff --git a/netplan/cli/commands/apply.py b/netplan/cli/commands/apply.py
+index b36662a..9d4511f 100644
+--- a/netplan/cli/commands/apply.py
++++ b/netplan/cli/commands/apply.py
+@@ -221,13 +221,22 @@ class NetplanApply(utils.NetplanCommand):
+                                        '/sys/class/net/' + device],
+                                       stdout=subprocess.DEVNULL,
+                                       stderr=subprocess.DEVNULL)
++                subprocess.check_call(['udevadm', 'test',
++                                       '/sys/class/net/' + device],
++                                      stdout=subprocess.DEVNULL,
++                                      stderr=subprocess.DEVNULL)
+             except subprocess.CalledProcessError:
+                 logging.debug('Ignoring device without syspath: %s', device)
+ 
++        devices_after_udev = netifaces.interfaces()
+         # apply some more changes manually
+         for iface, settings in changes.items():
+             # rename non-critical network interfaces
+-            if settings.get('name'):
++            new_name = settings.get('name')
++            if new_name:
++                if iface in devices and new_name in devices_after_udev:
++                    logging.debug('Interface rename {} -> {} already happened.'.format(iface, new_name))
++                    continue  # re-name already happened via 'udevadm test'
+                 # bring down the interface, using its current (matched) interface name
+                 subprocess.check_call(['ip', 'link', 'set', 'dev', iface, 'down'],
+                                       stdout=subprocess.DEVNULL,
+diff --git a/src/netplan.c b/src/netplan.c
+index 7b387b4..d1a27a6 100644
+--- a/src/netplan.c
++++ b/src/netplan.c
+@@ -752,13 +752,20 @@ _serialize_yaml(
+     YAML_BOOL_TRUE(def, event, emitter, "wakeonlan", def->wake_on_lan);
+ 
+     /* Offload options */
+-    YAML_BOOL_TRUE(def, event, emitter, "receive-checksum-offload", def->receive_checksum_offload);
+-    YAML_BOOL_TRUE(def, event, emitter, "transmit-checksum-offload", def->transmit_checksum_offload);
+-    YAML_BOOL_TRUE(def, event, emitter, "tcp-segmentation-offload", def->tcp_segmentation_offload);
+-    YAML_BOOL_TRUE(def, event, emitter, "tcp6-segmentation-offload", def->tcp6_segmentation_offload);
+-    YAML_BOOL_TRUE(def, event, emitter, "generic-segmentation-offload", def->generic_segmentation_offload);
+-    YAML_BOOL_TRUE(def, event, emitter, "generic-receive-offload", def->generic_receive_offload);
+-    YAML_BOOL_TRUE(def, event, emitter, "large-receive-offload", def->large_receive_offload);
++    if (def->receive_checksum_offload != NETPLAN_TRISTATE_UNSET)
++        YAML_BOOL_TRUE(def, event, emitter, "receive-checksum-offload", def->receive_checksum_offload);
++    if (def->transmit_checksum_offload != NETPLAN_TRISTATE_UNSET)
++        YAML_BOOL_TRUE(def, event, emitter, "transmit-checksum-offload", def->transmit_checksum_offload);
++    if (def->tcp_segmentation_offload != NETPLAN_TRISTATE_UNSET)
++        YAML_BOOL_TRUE(def, event, emitter, "tcp-segmentation-offload", def->tcp_segmentation_offload);
++    if (def->tcp6_segmentation_offload != NETPLAN_TRISTATE_UNSET)
++        YAML_BOOL_TRUE(def, event, emitter, "tcp6-segmentation-offload", def->tcp6_segmentation_offload);
++    if (def->generic_segmentation_offload != NETPLAN_TRISTATE_UNSET)
++        YAML_BOOL_TRUE(def, event, emitter, "generic-segmentation-offload", def->generic_segmentation_offload);
++    if (def->generic_receive_offload != NETPLAN_TRISTATE_UNSET)
++        YAML_BOOL_TRUE(def, event, emitter, "generic-receive-offload", def->generic_receive_offload);
++    if (def->large_receive_offload != NETPLAN_TRISTATE_UNSET)
++        YAML_BOOL_TRUE(def, event, emitter, "large-receive-offload", def->large_receive_offload);
+ 
+     if (def->wowlan && def->wowlan != NETPLAN_WIFI_WOWLAN_DEFAULT) {
+         YAML_SCALAR_PLAIN(event, emitter, "wakeonwlan");
+diff --git a/src/networkd.c b/src/networkd.c
+index 6d26047..62c87ce 100644
+--- a/src/networkd.c
++++ b/src/networkd.c
+@@ -243,13 +243,13 @@ write_link_file(const NetplanNetDefinition* def, const char* rootdir, const char
+     if (!def->set_name &&
+         !def->wake_on_lan &&
+         !def->mtubytes &&
+-        !def->receive_checksum_offload &&
+-        !def->transmit_checksum_offload &&
+-        !def->tcp_segmentation_offload &&
+-        !def->tcp6_segmentation_offload &&
+-        !def->generic_segmentation_offload &&
+-        !def->generic_receive_offload &&
+-        !def->large_receive_offload)
++        (def->receive_checksum_offload == NETPLAN_TRISTATE_UNSET) &&
++        (def->transmit_checksum_offload == NETPLAN_TRISTATE_UNSET) &&
++        (def->tcp_segmentation_offload == NETPLAN_TRISTATE_UNSET) &&
++        (def->tcp6_segmentation_offload == NETPLAN_TRISTATE_UNSET) &&
++        (def->generic_segmentation_offload == NETPLAN_TRISTATE_UNSET) &&
++        (def->generic_receive_offload == NETPLAN_TRISTATE_UNSET) &&
++        (def->large_receive_offload == NETPLAN_TRISTATE_UNSET))
+         return;
+ 
+     /* build file contents */
+@@ -265,26 +265,33 @@ write_link_file(const NetplanNetDefinition* def, const char* rootdir, const char
+         g_string_append_printf(s, "MTUBytes=%u\n", def->mtubytes);
+ 
+     /* Offload options */
+-    if (def->receive_checksum_offload)
+-        g_string_append_printf(s, "ReceiveChecksumOffload=%u\n", def->receive_checksum_offload);
++    if (def->receive_checksum_offload != NETPLAN_TRISTATE_UNSET)
++        g_string_append_printf(s, "ReceiveChecksumOffload=%s\n",
++        (def->receive_checksum_offload ? "true" : "false"));
+ 
+-    if (def->transmit_checksum_offload)
+-        g_string_append_printf(s, "TransmitChecksumOffload=%u\n", def->transmit_checksum_offload);
++    if (def->transmit_checksum_offload != NETPLAN_TRISTATE_UNSET)
++        g_string_append_printf(s, "TransmitChecksumOffload=%s\n",
++        (def->transmit_checksum_offload ? "true" : "false"));
+ 
+-    if (def->tcp_segmentation_offload)
+-        g_string_append_printf(s, "TCPSegmentationOffload=%u\n", def->tcp_segmentation_offload);
++    if (def->tcp_segmentation_offload != NETPLAN_TRISTATE_UNSET)
++        g_string_append_printf(s, "TCPSegmentationOffload=%s\n",
++        (def->tcp_segmentation_offload ? "true" : "false"));
+ 
+-    if (def->tcp6_segmentation_offload)
+-        g_string_append_printf(s, "TCP6SegmentationOffload=%u\n", def->tcp6_segmentation_offload);
++    if (def->tcp6_segmentation_offload != NETPLAN_TRISTATE_UNSET)
++        g_string_append_printf(s, "TCP6SegmentationOffload=%s\n",
++        (def->tcp6_segmentation_offload ? "true" : "false"));
+ 
+-    if (def->generic_segmentation_offload)
+-        g_string_append_printf(s, "GenericSegmentationOffload=%u\n", def->generic_segmentation_offload);
++    if (def->generic_segmentation_offload != NETPLAN_TRISTATE_UNSET)
++        g_string_append_printf(s, "GenericSegmentationOffload=%s\n",
++        (def->generic_segmentation_offload ? "true" : "false"));
+ 
+-    if (def->generic_receive_offload)
+-        g_string_append_printf(s, "GenericReceiveOffload=%u\n", def->generic_receive_offload);
++    if (def->generic_receive_offload != NETPLAN_TRISTATE_UNSET)
++        g_string_append_printf(s, "GenericReceiveOffload=%s\n",
++        (def->generic_receive_offload ? "true" : "false"));
+ 
+-    if (def->large_receive_offload)
+-        g_string_append_printf(s, "LargeReceiveOffload=%u\n", def->large_receive_offload);
++    if (def->large_receive_offload != NETPLAN_TRISTATE_UNSET)
++        g_string_append_printf(s, "LargeReceiveOffload=%s\n",
++        (def->large_receive_offload ? "true" : "false"));
+ 
+     orig_umask = umask(022);
+     g_string_free_to_file(s, rootdir, path, ".link");
+diff --git a/src/parse.c b/src/parse.c
+index 350c508..0cb07d2 100644
+--- a/src/parse.c
++++ b/src/parse.c
+@@ -370,6 +370,37 @@ handle_generic_bool(NetplanParser* npp, yaml_node_t* node, void* entryptr, const
+     return TRUE;
+ }
+ 
++/*
++ * Handler for setting a HashTable field from a mapping node, inside a given struct
++ * @entryptr: pointer to the beginning of the to-be-modified data structure
++ * @data: offset into entryptr struct where the boolean field to write is located
++ */
++static gboolean
++handle_generic_tristate(NetplanParser* npp, yaml_node_t* node, void* entryptr, const void* data, GError** error)
++{
++    g_assert(entryptr);
++    NetplanTristate v;
++    guint offset = GPOINTER_TO_UINT(data);
++    NetplanTristate* dest = ((void*) entryptr + offset);
++
++    if (g_ascii_strcasecmp(scalar(node), "true") == 0 ||
++        g_ascii_strcasecmp(scalar(node), "on") == 0 ||
++        g_ascii_strcasecmp(scalar(node), "yes") == 0 ||
++        g_ascii_strcasecmp(scalar(node), "y") == 0)
++        v = NETPLAN_TRISTATE_TRUE;
++    else if (g_ascii_strcasecmp(scalar(node), "false") == 0 ||
++        g_ascii_strcasecmp(scalar(node), "off") == 0 ||
++        g_ascii_strcasecmp(scalar(node), "no") == 0 ||
++        g_ascii_strcasecmp(scalar(node), "n") == 0)
++        v = NETPLAN_TRISTATE_FALSE;
++    else
++        return yaml_error(npp, node, error, "invalid boolean value '%s'", scalar(node));
++
++    *dest = v;
++    mark_data_as_dirty(npp, dest);
++    return TRUE;
++}
++
+ /*
+  * Handler for setting a HashTable field from a mapping node, inside a given struct
+  * @entryptr: pointer to the beginning of the to-be-modified data structure
+@@ -516,6 +547,16 @@ handle_netdef_bool(NetplanParser* npp, yaml_node_t* node, const void* data, GErr
+     return handle_generic_bool(npp, node, npp->current.netdef, data, error);
+ }
+ 
++/**
++ * Generic handler for tri-state settings that can bei "UNSET", "TRUE", or "FALSE".
++ * @data: offset into NetplanNetDefinition where the guint field to write is located
++ */
++static gboolean
++handle_netdef_tristate(NetplanParser* npp, yaml_node_t* node, const void* data, GError** error)
++{
++    return handle_generic_tristate(npp, node, npp->current.netdef, data, error);
++}
++
+ /**
+  * Generic handler for setting a npp->current.netdef guint field from a scalar node
+  * @data: offset into NetplanNetDefinition where the guint field to write is located
+@@ -2356,13 +2397,13 @@ static const mapping_entry_handler dhcp6_overrides_handlers[] = {
+     {"wakeonlan", YAML_SCALAR_NODE, {.generic=handle_netdef_bool}, netdef_offset(wake_on_lan)}, \
+     {"wakeonwlan", YAML_SEQUENCE_NODE, {.generic=handle_wowlan}, netdef_offset(wowlan)}, \
+     {"emit-lldp", YAML_SCALAR_NODE, {.generic=handle_netdef_bool}, netdef_offset(emit_lldp)}, \
+-    {"receive-checksum-offload", YAML_SCALAR_NODE, {.generic=handle_netdef_bool}, netdef_offset(receive_checksum_offload)}, \
+-    {"transmit-checksum-offload", YAML_SCALAR_NODE, {.generic=handle_netdef_bool}, netdef_offset(transmit_checksum_offload)}, \
+-    {"tcp-segmentation-offload", YAML_SCALAR_NODE, {.generic=handle_netdef_bool}, netdef_offset(tcp_segmentation_offload)}, \
+-    {"tcp6-segmentation-offload", YAML_SCALAR_NODE, {.generic=handle_netdef_bool}, netdef_offset(tcp6_segmentation_offload)}, \
+-    {"generic-segmentation-offload", YAML_SCALAR_NODE, {.generic=handle_netdef_bool}, netdef_offset(generic_segmentation_offload)}, \
+-    {"generic-receive-offload", YAML_SCALAR_NODE, {.generic=handle_netdef_bool}, netdef_offset(generic_receive_offload)}, \
+-    {"large-receive-offload", YAML_SCALAR_NODE, {.generic=handle_netdef_bool}, netdef_offset(large_receive_offload)}
++    {"receive-checksum-offload", YAML_SCALAR_NODE, {.generic=handle_netdef_tristate}, netdef_offset(receive_checksum_offload)}, \
++    {"transmit-checksum-offload", YAML_SCALAR_NODE, {.generic=handle_netdef_tristate}, netdef_offset(transmit_checksum_offload)}, \
++    {"tcp-segmentation-offload", YAML_SCALAR_NODE, {.generic=handle_netdef_tristate}, netdef_offset(tcp_segmentation_offload)}, \
++    {"tcp6-segmentation-offload", YAML_SCALAR_NODE, {.generic=handle_netdef_tristate}, netdef_offset(tcp6_segmentation_offload)}, \
++    {"generic-segmentation-offload", YAML_SCALAR_NODE, {.generic=handle_netdef_tristate}, netdef_offset(generic_segmentation_offload)}, \
++    {"generic-receive-offload", YAML_SCALAR_NODE, {.generic=handle_netdef_tristate}, netdef_offset(generic_receive_offload)}, \
++    {"large-receive-offload", YAML_SCALAR_NODE, {.generic=handle_netdef_tristate}, netdef_offset(large_receive_offload)}
+ 
+ static const mapping_entry_handler ethernet_def_handlers[] = {
+     COMMON_LINK_HANDLERS,
+diff --git a/src/types.c b/src/types.c
+index eb9f780..00c2b0f 100644
+--- a/src/types.c
++++ b/src/types.c
+@@ -335,6 +335,14 @@ reset_netdef(NetplanNetDefinition* netdef, NetplanDefType new_type, NetplanBacke
+ 
+     reset_private_netdef_data(netdef->_private);
+     FREE_AND_NULLIFY(netdef->_private);
++
++    netdef->receive_checksum_offload = NETPLAN_TRISTATE_UNSET;
++    netdef->transmit_checksum_offload = NETPLAN_TRISTATE_UNSET;
++    netdef->tcp_segmentation_offload = NETPLAN_TRISTATE_UNSET;
++    netdef->tcp6_segmentation_offload = NETPLAN_TRISTATE_UNSET;
++    netdef->generic_segmentation_offload = NETPLAN_TRISTATE_UNSET;
++    netdef->generic_receive_offload = NETPLAN_TRISTATE_UNSET;
++    netdef->large_receive_offload = NETPLAN_TRISTATE_UNSET;
+ }
+ 
+ static void
+diff --git a/src/types.h b/src/types.h
+index 27a23fc..710b1f1 100644
+--- a/src/types.h
++++ b/src/types.h
+@@ -171,6 +171,27 @@ typedef union {
+     } networkd;
+ } NetplanBackendSettings;
+ 
++typedef enum
++{
++    /**
++     * @brief Tristate enum type
++     *
++     * This type defines a boolean which can be unset, i.e.
++     * this type has three states. The enum is ordered so
++     * that
++     *
++     * UNSET -> -1
++     * FALSE -> 0
++     * TRUE  -> 1
++     *
++     * And the integer values can be used directly when
++     * converting to string.
++     */
++    NETPLAN_TRISTATE_UNSET = -1, /* -1 */
++    NETPLAN_TRISTATE_FALSE,      /*  0 */
++    NETPLAN_TRISTATE_TRUE,       /*  1 */
++} NetplanTristate;
++
+ struct netplan_net_definition {
+     NetplanDefType type;
+     NetplanBackend backend;
+@@ -333,13 +354,13 @@ struct netplan_net_definition {
+     gboolean ignore_carrier;
+ 
+     /* offload options */
+-    gboolean receive_checksum_offload;
+-    gboolean transmit_checksum_offload;
+-    gboolean tcp_segmentation_offload;
+-    gboolean tcp6_segmentation_offload;
+-    gboolean generic_segmentation_offload;
+-    gboolean generic_receive_offload;
+-    gboolean large_receive_offload;
++    NetplanTristate receive_checksum_offload;
++    NetplanTristate transmit_checksum_offload;
++    NetplanTristate tcp_segmentation_offload;
++    NetplanTristate tcp6_segmentation_offload;
++    NetplanTristate generic_segmentation_offload;
++    NetplanTristate generic_receive_offload;
++    NetplanTristate large_receive_offload;
+ 
+     struct private_netdef_data* _private;
+ 
+diff --git a/tests/generator/test_ethernets.py b/tests/generator/test_ethernets.py
+index 46bf764..e81941b 100644
+--- a/tests/generator/test_ethernets.py
++++ b/tests/generator/test_ethernets.py
+@@ -772,11 +772,11 @@ method=ignore
+   ethernets:
+     eth1:
+       receive-checksum-offload: true
+-      transmit-checksum-offload: true
++      transmit-checksum-offload: off
+       tcp-segmentation-offload: true
+-      tcp6-segmentation-offload: true
++      tcp6-segmentation-offload: false
+       generic-segmentation-offload: true
+-      generic-receive-offload: true
++      generic-receive-offload: no
+       large-receive-offload: true''')
+ 
+         self.assert_networkd({'eth1.link': '''[Match]
+@@ -784,13 +784,13 @@ OriginalName=eth1
+ 
+ [Link]
+ WakeOnLan=off
+-ReceiveChecksumOffload=1
+-TransmitChecksumOffload=1
+-TCPSegmentationOffload=1
+-TCP6SegmentationOffload=1
+-GenericSegmentationOffload=1
+-GenericReceiveOffload=1
+-LargeReceiveOffload=1
++ReceiveChecksumOffload=true
++TransmitChecksumOffload=false
++TCPSegmentationOffload=true
++TCP6SegmentationOffload=false
++GenericSegmentationOffload=true
++GenericReceiveOffload=false
++LargeReceiveOffload=true
+ ''',
+                               'eth1.network': '''[Match]
+ Name=eth1
+@@ -799,3 +799,17 @@ Name=eth1
+ LinkLocalAddressing=ipv6
+ '''})
+         self.assert_networkd_udev(None)
++
++    def test_offload_invalid(self):
++        err = self.generate('''network:
++  version: 2
++  ethernets:
++    eth1:
++      generic-receive-offload: n
++      receive-checksum-offload: true
++      tcp-segmentation-offload: true
++      tcp6-segmentation-offload: false
++      generic-segmentation-offload: true
++      transmit-checksum-offload: xx
++      large-receive-offload: true''', expect_fail=True)
++        self.assertIn('invalid boolean value \'xx\'', err)
+diff --git a/tests/integration/ethernets.py b/tests/integration/ethernets.py
+index 865c0d4..06ac069 100644
+--- a/tests/integration/ethernets.py
++++ b/tests/integration/ethernets.py
+@@ -236,6 +236,65 @@ class _CommonTests():
+         self.assert_iface_up('iface1', ['inet 10.10.10.11'])
+         self.assert_iface_up('iface2', ['inet 10.10.10.22'])
+ 
++    def test_link_offloading(self):
++        self.setup_eth(None, False)
++        # check kernel defaults
++        out = subprocess.check_output(['ethtool', '-k', self.dev_e_client])
++        self.assertIn(b'rx-checksumming: on', out)
++        self.assertIn(b'tx-checksumming: on', out)
++        self.assertIn(b'tcp-segmentation-offload: on', out)
++        self.assertIn(b'tx-tcp6-segmentation: on', out)
++        self.assertIn(b'generic-segmentation-offload: on', out)
++        self.assertIn(b'generic-receive-offload: off', out)  # off by default
++        # validate turning off
++        with open(self.config, 'w') as f:
++            f.write('''network:
++  renderer: %(r)s
++  ethernets:
++    %(ec)s:
++      addresses: [10.10.10.22/24]
++      receive-checksum-offload: off
++      transmit-checksum-offload: off
++      tcp-segmentation-offload: off
++      tcp6-segmentation-offload: off
++      generic-segmentation-offload: off
++      generic-receive-offload: off
++      #large-receive-offload: off # not possible on veth
++''' % {'r': self.backend, 'ec': self.dev_e_client})
++        self.generate_and_settle([self.dev_e_client])
++        self.assert_iface_up(self.dev_e_client, ['inet 10.10.10.22'])
++        out = subprocess.check_output(['ethtool', '-k', self.dev_e_client])
++        self.assertIn(b'rx-checksumming: off', out)
++        self.assertIn(b'tx-checksumming: off', out)
++        self.assertIn(b'tcp-segmentation-offload: off', out)
++        self.assertIn(b'tx-tcp6-segmentation: off', out)
++        self.assertIn(b'generic-segmentation-offload: off', out)
++        self.assertIn(b'generic-receive-offload: off', out)
++        # validate turning on
++        with open(self.config, 'w') as f:
++            f.write('''network:
++  renderer: %(r)s
++  ethernets:
++    %(ec)s:
++      addresses: [10.10.10.22/24]
++      receive-checksum-offload: true
++      transmit-checksum-offload: true
++      tcp-segmentation-offload: true
++      tcp6-segmentation-offload: true
++      generic-segmentation-offload: true
++      generic-receive-offload: true
++      #large-receive-offload: true # not possible on veth
++''' % {'r': self.backend, 'ec': self.dev_e_client})
++        self.generate_and_settle([self.dev_e_client])
++        self.assert_iface_up(self.dev_e_client, ['inet 10.10.10.22'])
++        out = subprocess.check_output(['ethtool', '-k', self.dev_e_client])
++        self.assertIn(b'rx-checksumming: on', out)
++        self.assertIn(b'tx-checksumming: on', out)
++        self.assertIn(b'tcp-segmentation-offload: on', out)
++        self.assertIn(b'tx-tcp6-segmentation: on', out)
++        self.assertIn(b'generic-segmentation-offload: on', out)
++        self.assertIn(b'generic-receive-offload: on', out)
++
+ 
+ @unittest.skipIf("networkd" not in test_backends,
+                      "skipping as networkd backend tests are disabled")

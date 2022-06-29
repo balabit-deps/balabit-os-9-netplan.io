@@ -1,0 +1,148 @@
+Test-Command: python3 tests/integration/run.py --test=ovs
+Tests-Directory: tests/integration
+Depends: @,
+  systemd,
+  network-manager,
+  hostapd,
+  wpasupplicant,
+  dnsmasq-base,
+  libnm0,
+  python3-gi,
+  gir1.2-nm-1.0,
+  openvswitch-switch,
+Restrictions: allow-stderr, needs-root, isolation-container, skip-not-installable
+Features: test-name=ovs
+
+Test-Command: python3 tests/integration/run.py --test=ethernets
+Tests-Directory: tests/integration
+Depends: @,
+  systemd,
+  network-manager,
+  hostapd,
+  wpasupplicant,
+  dnsmasq-base,
+  libnm0,
+  python3-gi,
+  gir1.2-nm-1.0,
+  ethtool,
+Restrictions: allow-stderr, needs-root, isolation-container
+Features: test-name=ethernets
+
+Test-Command: python3 tests/integration/run.py --test=bridges
+Tests-Directory: tests/integration
+Depends: @,
+  systemd,
+  network-manager,
+  hostapd,
+  wpasupplicant,
+  dnsmasq-base,
+  libnm0,
+  python3-gi,
+  gir1.2-nm-1.0,
+Restrictions: allow-stderr, needs-root, isolation-container
+Features: test-name=bridges
+
+Test-Command: python3 tests/integration/run.py --test=bonds
+Tests-Directory: tests/integration
+Depends: @,
+  systemd,
+  network-manager,
+  hostapd,
+  wpasupplicant,
+  dnsmasq-base,
+  libnm0,
+  python3-gi,
+  gir1.2-nm-1.0,
+Restrictions: allow-stderr, needs-root, isolation-container
+Features: test-name=bonds
+
+Test-Command: python3 tests/integration/run.py --test=routing
+Tests-Directory: tests/integration
+Depends: @,
+  systemd,
+  network-manager,
+  hostapd,
+  wpasupplicant,
+  dnsmasq-base,
+  libnm0,
+  python3-gi,
+  gir1.2-nm-1.0,
+Restrictions: allow-stderr, needs-root, isolation-container
+Features: test-name=routing
+
+Test-Command: python3 tests/integration/run.py --test=vlans
+Tests-Directory: tests/integration
+Depends: @,
+  systemd,
+  network-manager,
+  hostapd,
+  wpasupplicant,
+  dnsmasq-base,
+  libnm0,
+  python3-gi,
+  gir1.2-nm-1.0,
+Restrictions: allow-stderr, needs-root, isolation-container
+Features: test-name=vlans
+
+Test-Command: python3 tests/integration/run.py --test=wifi
+Tests-Directory: tests/integration
+Depends: @,
+  systemd,
+  network-manager,
+  hostapd,
+  wpasupplicant,
+  dnsmasq-base,
+  libnm0,
+  python3-gi,
+  gir1.2-nm-1.0,
+Restrictions: allow-stderr, needs-root, isolation-container, flaky
+Features: test-name=wifi
+
+Test-Command: python3 tests/integration/run.py --test=tunnels
+Tests-Directory: tests/integration
+Depends: @,
+  systemd,
+  network-manager,
+  hostapd,
+  wpasupplicant,
+  dnsmasq-base,
+  libnm0,
+  python3-gi,
+  gir1.2-nm-1.0,
+  wireguard-tools,
+Restrictions: allow-stderr, needs-root, isolation-container
+Features: test-name=tunnels
+
+Test-Command: python3 tests/integration/run.py --test=scenarios
+Tests-Directory: tests/integration
+Depends: @,
+  systemd,
+  network-manager,
+  hostapd,
+  wpasupplicant,
+  dnsmasq-base,
+  libnm0,
+  python3-gi,
+  gir1.2-nm-1.0,
+Restrictions: allow-stderr, needs-root, isolation-container
+Features: test-name=scenarios
+
+Test-Command: python3 tests/integration/run.py --test=regressions
+Tests-Directory: tests/integration
+Depends: @,
+  systemd,
+  network-manager,
+  hostapd,
+  wpasupplicant,
+  dnsmasq-base,
+  libnm0,
+  python3-gi,
+  gir1.2-nm-1.0,
+Restrictions: allow-stderr, needs-root, isolation-container
+Features: test-name=regressions
+
+Tests: autostart
+Restrictions: allow-stderr, needs-root, isolation-container
+
+Tests: cloud-init
+Restrictions: allow-stderr, needs-root, isolation-container

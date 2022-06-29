@@ -1,0 +1,5 @@
+autopkgtest-fixes.patch
+0002-cli-apply-fix-potential-race-with-rename-creation-of.patch
+0010-nm-fix-rendering-of-password-for-unknown-passthrough.patch
+0003-Add-tristate-type-for-offload-options-LP-1956264-270.patch
+0004-tests-ethernets-fix-autopkgtest-with-alternating-def.patch

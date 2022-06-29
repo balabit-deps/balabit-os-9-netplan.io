@@ -1,0 +1,173 @@
+From: =?utf-8?q?Lukas_M=C3=A4rdian?= <slyon@ubuntu.com>
+Date: Thu, 10 Mar 2022 09:41:58 +0100
+Subject: cli:apply: fix potential race with rename/creation of netdevs and
+ start networkd if off (LP: #1962095) (#260)
+
+Calling networkctl_reload() before networkd_interfaces() makes sure that newly created netdevs will show up in the interface list.
+
+Making use of the index number (instead of interface name) ensures that renamed interfaces are properly reconfigured even if they changed their name.
+
+Starting networkd if not active is making sure we can process network changes even if systemd-networkd was stopped before (e.g. by subiquity), see LP#1962095
+
+COMMITS:
+* tests:integration:base: increase debugging output
+* cli:apply: fix potential race with rename/creation of netdevs
+Calling networkctl_reload() before networkd_interfaces() makes sure that newly created netdevs will show up in the interface list.
+Making use of the index number (instead of interface name) ensures that renamed interfaces are properly reconfigured even if they changed their name.
+* tests:regressions: handle networkd inactive fallback (LP: #1962095)
+* cli:apply: start networkd if stopped (LP: #1962095)
+* tests:bonds: do not try to match on MAC while changing it at the same time
+When a MAC address is set for a bond, networkd will set the same MAC address to
+the enslaved interfaces. Therefore we cannot match on the original MAC for the
+ethernet device, as networkd will not find/manage that interface otherwise.
+https://systemd.network/systemd.netdev.html#MACAddress=
+---
+ netplan/cli/commands/apply.py    |  8 +++++++-
+ netplan/cli/utils.py             |  7 +++++--
+ tests/integration/base.py        |  7 ++++++-
+ tests/integration/bonds.py       |  4 +---
+ tests/integration/regressions.py | 16 ++++++++++++++++
+ tests/test_utils.py              | 18 +++++++++++++-----
+ 6 files changed, 48 insertions(+), 12 deletions(-)
+
+diff --git a/netplan/cli/commands/apply.py b/netplan/cli/commands/apply.py
+index d481184..b36662a 100644
+--- a/netplan/cli/commands/apply.py
++++ b/netplan/cli/commands/apply.py
+@@ -252,7 +252,13 @@ class NetplanApply(utils.NetplanCommand):
+                            if not f.endswith('/' + OVS_CLEANUP_SERVICE)]
+             # Run 'systemctl start' command synchronously, to avoid race conditions
+             # with 'oneshot' systemd service units, e.g. netplan-ovs-*.service.
+-            utils.networkctl_reconfigure(utils.networkd_interfaces())
++            try:
++                utils.networkctl_reload()
++                utils.networkctl_reconfigure(utils.networkd_interfaces())
++            except subprocess.CalledProcessError:
++                # (re-)start systemd-networkd if it is not running, yet
++                logging.warning('Falling back to a hard restart of systemd-networkd.service')
++                utils.systemctl('restart', ['systemd-networkd.service'], sync=True)
+             # 1st: execute OVS cleanup, to avoid races while applying OVS config
+             utils.systemctl('start', [OVS_CLEANUP_SERVICE], sync=True)
+             # 2nd: start all other services
+diff --git a/netplan/cli/utils.py b/netplan/cli/utils.py
+index a05b42b..4fb1dad 100644
+--- a/netplan/cli/utils.py
++++ b/netplan/cli/utils.py
+@@ -95,12 +95,15 @@ def networkd_interfaces():
+     for line in out.splitlines():
+         s = line.strip().split(' ')
+         if s[0].isnumeric() and s[-1] not in ['unmanaged', 'linger']:
+-            interfaces.add(s[1])
++            interfaces.add(s[0])
+     return interfaces
+ 
+ 
+-def networkctl_reconfigure(interfaces):
++def networkctl_reload():
+     subprocess.check_call(['networkctl', 'reload'])
++
++
++def networkctl_reconfigure(interfaces):
+     if len(interfaces) >= 1:
+         subprocess.check_call(['networkctl', 'reconfigure'] + list(interfaces))
+ 
+diff --git a/tests/integration/base.py b/tests/integration/base.py
+index fffcaa7..10094dd 100644
+--- a/tests/integration/base.py
++++ b/tests/integration/base.py
+@@ -294,7 +294,12 @@ class IntegrationTestsBase(unittest.TestCase):
+         cmd = ['netplan', 'apply']
+         if state_dir:
+             cmd = cmd + ['--state', state_dir]
+-        out = subprocess.check_output(cmd, stderr=subprocess.STDOUT, universal_newlines=True)
++        out = ''
++        try:
++            out = subprocess.check_output(cmd, stderr=subprocess.STDOUT, universal_newlines=True)
++        except subprocess.CalledProcessError as e:
++            self.assertTrue(False, 'netplan apply failed: {}'.format(e.output))
++
+         if 'Run \'systemctl daemon-reload\' to reload units.' in out:
+             self.fail('systemd units changed without reload')
+         # start NM so that we can verify that it does not manage anything
+diff --git a/tests/integration/bonds.py b/tests/integration/bonds.py
+index 763f7e5..2e3773e 100644
+--- a/tests/integration/bonds.py
++++ b/tests/integration/bonds.py
+@@ -315,14 +315,12 @@ class TestNetworkd(IntegrationTestsBase, _CommonTests):
+     ethbn:
+       match:
+         name: %(ec)s
+-        macaddress: %(ec_mac)s
+   bonds:
+     mybond:
+       interfaces: [ethbn]
+       macaddress: 00:01:02:03:04:05
+       dhcp4: yes''' % {'r': self.backend,
+-                       'ec': self.dev_e_client,
+-                       'ec_mac': self.dev_e_client_mac})
++                       'ec': self.dev_e_client})
+         self.generate_and_settle([self.dev_e_client, self.state_dhcp4('mybond')])
+         self.assert_iface_up(self.dev_e_client, ['master mybond'], ['inet '])
+         self.assert_iface_up('mybond', ['inet 192.168.5.[0-9]+/24', '00:01:02:03:04:05'])
+diff --git a/tests/integration/regressions.py b/tests/integration/regressions.py
+index 40aeeac..7d8cabb 100644
+--- a/tests/integration/regressions.py
++++ b/tests/integration/regressions.py
+@@ -118,6 +118,22 @@ r'Press ENTER before the timeout to accept the new configuration\n\n\n'
+ r'(Changes will revert in \d+ seconds\n)+'
+ r'Reverting\.')
+ 
++    def test_apply_networkd_inactive_lp1962095(self):
++        self.setup_eth(None)
++        with open(self.config, 'w') as f:
++            f.write('''network:
++  ethernets:
++    %(ec)s:
++      dhcp4: true
++    %(e2c)s:
++      dhcp4: true
++  version: 2''' % {'r': self.backend, 'ec': self.dev_e_client, 'e2c': self.dev_e2_client})
++        # stop networkd to simulate the failure case
++        subprocess.check_call(['systemctl', 'stop', 'systemd-networkd.service', 'systemd-networkd.socket'])
++        self.generate_and_settle([self.state_dhcp4(self.dev_e_client), self.state_dhcp4(self.dev_e2_client)])
++        self.assert_iface_up(self.dev_e_client, ['inet 192.168.5.[0-9]+/24'])
++        self.assert_iface_up(self.dev_e2_client, ['inet 192.168.6.[0-9]+/24'])
++
+ 
+ @unittest.skipIf("NetworkManager" not in test_backends,
+                      "skipping as NetworkManager backend tests are disabled")
+diff --git a/tests/test_utils.py b/tests/test_utils.py
+index b958d58..bd035a9 100644
+--- a/tests/test_utils.py
++++ b/tests/test_utils.py
+@@ -215,17 +215,25 @@ class TestUtils(unittest.TestCase):
+ 174 wwan0           wwan     off        linger''')
+         res = utils.networkd_interfaces()
+         self.assertEquals(self.mock_networkctl.calls(), [['networkctl', '--no-pager', '--no-legend']])
+-        self.assertIn('wlan0', res)
+-        self.assertIn('ens3', res)
++        self.assertIn('2', res)
++        self.assertIn('3', res)
++
++    def test_networkctl_reload(self):
++        self.mock_networkctl = MockCmd('networkctl')
++        path_env = os.environ['PATH']
++        os.environ['PATH'] = os.path.dirname(self.mock_networkctl.path) + os.pathsep + path_env
++        utils.networkctl_reload()
++        self.assertEquals(self.mock_networkctl.calls(), [
++            ['networkctl', 'reload']
++        ])
+ 
+     def test_networkctl_reconfigure(self):
+         self.mock_networkctl = MockCmd('networkctl')
+         path_env = os.environ['PATH']
+         os.environ['PATH'] = os.path.dirname(self.mock_networkctl.path) + os.pathsep + path_env
+-        utils.networkctl_reconfigure(['eth0', 'eth1'])
++        utils.networkctl_reconfigure(['3', '5'])
+         self.assertEquals(self.mock_networkctl.calls(), [
+-            ['networkctl', 'reload'],
+-            ['networkctl', 'reconfigure', 'eth0', 'eth1']
++            ['networkctl', 'reconfigure', '3', '5']
+         ])
+ 
+     def test_is_nm_snap_enabled(self):

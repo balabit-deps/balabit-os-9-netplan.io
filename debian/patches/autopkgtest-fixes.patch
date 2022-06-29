@@ -1,0 +1,38 @@
+diff --git a/tests/integration/base.py b/tests/integration/base.py
+index 5042bf4..93ee722 100644
+--- a/tests/integration/base.py
++++ b/tests/integration/base.py
+@@ -75,7 +75,7 @@ class IntegrationTestsBase(unittest.TestCase):
+ 
+         os.makedirs('/etc/NetworkManager/conf.d', exist_ok=True)
+         with open('/etc/NetworkManager/conf.d/99-test-ignore.conf', 'w') as f:
+-            f.write('[keyfile]\nunmanaged-devices+=interface-name:eth0,interface-name:en*,interface-name:veth42,interface-name:veth43')
++            f.write('[keyfile]\nunmanaged-devices+=interface-name:en*,eth0,veth42,veth43,nptestsrv')
+         subprocess.check_call(['netplan', 'apply'])
+         subprocess.call(['/lib/systemd/systemd-networkd-wait-online', '--quiet', '--timeout=30'])
+ 
+@@ -144,12 +144,6 @@ class IntegrationTestsBase(unittest.TestCase):
+                                       universal_newlines=True)
+         klass.dev_e2_client_mac = out.split()[2]
+ 
+-        os.makedirs('/run/NetworkManager/conf.d', exist_ok=True)
+-
+-        # work around https://launchpad.net/bugs/1615044
+-        with open('/run/NetworkManager/conf.d/11-globally-managed-devices.conf', 'w') as f:
+-            f.write('[keyfile]\nunmanaged-devices=')
+-
+     @classmethod
+     def shutdown_devices(klass):
+         '''Remove test devices'''
+@@ -440,9 +434,10 @@ class IntegrationTestsWifi(IntegrationTestsBase):
+         klass.dev_w_ap = devs[0]
+         klass.dev_w_client = devs[1]
+ 
++        os.makedirs('/run/NetworkManager/conf.d', exist_ok=True)
+         # don't let NM trample over our fake AP
+         with open('/run/NetworkManager/conf.d/test-blacklist.conf', 'w') as f:
+-            f.write('[main]\nplugins=keyfile\n[keyfile]\nunmanaged-devices+=nptestsrv,%s\n' % klass.dev_w_ap)
++            f.write('[main]\nplugins=keyfile\n[keyfile]\nunmanaged-devices+=%s\n' % klass.dev_w_ap)
+ 
+     @classmethod
+     def shutdown_devices(klass):
