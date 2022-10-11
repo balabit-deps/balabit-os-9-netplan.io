@@ -23,10 +23,10 @@
 
 import sys
 import subprocess
-import time
 import unittest
 
 from base import IntegrationTestsBase, test_backends
+
 
 class _CommonTests():
 
@@ -127,12 +127,6 @@ class _CommonTests():
         self.assertRegex(out, r'transfer: \d+.*B received, \d+.*B sent')
         self.assert_iface('wg1', ['inet 20.20.20.10/24'])
 
-
-@unittest.skipIf("networkd" not in test_backends,
-                     "skipping as networkd backend tests are disabled")
-class TestNetworkd(IntegrationTestsBase, _CommonTests):
-    backend = 'networkd'
-
     def test_tunnel_gre(self):
         self.addCleanup(subprocess.call, ['ip', 'link', 'delete', 'tun0'], stderr=subprocess.DEVNULL)
         with open(self.config, 'w') as f:
@@ -162,6 +156,88 @@ class TestNetworkd(IntegrationTestsBase, _CommonTests):
 ''' % {'r': self.backend})
         self.generate_and_settle(['tun0'])
         self.assert_iface('tun0', ['tun0@NONE', 'link.* fe80::1 brd 2001:dead:beef::2'])
+
+    def test_tunnel_gre_with_keys(self):
+        self.addCleanup(subprocess.call, ['ip', 'link', 'delete', 'tun0'], stderr=subprocess.DEVNULL)
+        with open(self.config, 'w') as f:
+            f.write('''network:
+  renderer: %(r)s
+  version: 2
+  tunnels:
+    tun0:
+      mode: gre
+      keys:
+        input: 1234
+        output: 5678
+      local: 192.168.5.1
+      remote: 99.99.99.99
+''' % {'r': self.backend})
+        self.generate_and_settle(['tun0'])
+        self.assert_iface('tun0', ['tun0@NONE', 'link.* 192.168.5.1 peer 99.99.99.99'])
+        out = subprocess.check_output(['ip', 'tunnel', 'show', 'tun0'], universal_newlines=True)
+        self.assertIn("ikey 1234 okey 5678", out)
+
+    def test_tunnel_gre6_with_keys(self):
+        self.addCleanup(subprocess.call, ['ip', 'link', 'delete', 'tun0'], stderr=subprocess.DEVNULL)
+        with open(self.config, 'w') as f:
+            f.write('''network:
+  renderer: %(r)s
+  version: 2
+  tunnels:
+    tun0:
+      mode: ip6gre
+      key: 1234
+      local: fe80::1
+      remote: 2001:dead:beef::2
+''' % {'r': self.backend})
+        self.generate_and_settle(['tun0'])
+        self.assert_iface('tun0', ['tun0@NONE', 'link.* fe80::1 brd 2001:dead:beef::2'])
+        out = subprocess.check_output(['ip', '-6', 'tunnel', 'show', 'tun0'], universal_newlines=True)
+        self.assertIn("key 1234", out)
+
+    def test_tunnel_vxlan(self):
+        self.addCleanup(subprocess.call, ['ip', 'link', 'delete', 'vx0'], stderr=subprocess.DEVNULL)
+        self.setup_eth(None, False)
+        with open(self.config, 'w') as f:
+            f.write('''network:
+  renderer: %(r)s
+  version: 2
+  tunnels:
+    vx0:
+      mode: vxlan
+      id: 1337
+      link: %(ec)s
+      local: 10.10.10.42
+      remote: 224.0.0.5 # multicast group
+      ttl: 64
+      aging: 100
+      port: 4567
+      port-range: [4000, 4200]
+      mac-learning: false
+      short-circuit: true
+      notifications: [l2-miss, l3-miss]
+      checksums: [udp, zero-udp6-tx, zero-udp6-rx, remote-tx, remote-rx] # sd-networkd only
+  ethernets:
+    %(ec)s:
+        addresses: [10.10.10.42/24]
+''' % {'r': self.backend, 'ec': self.dev_e_client})
+        self.generate_and_settle([self.dev_e_client, 'vx0'])
+        self.assert_iface('vx0', ['vxlan ', ' id 1337 ', ' group 224.0.0.5 ',
+                                  ' local 10.10.10.42 ', ' srcport 4000 4200 ',
+                                  ' dev %s ' % self.dev_e_client,
+                                  ' dstport 4567 ', ' rsc ', ' l2miss ',
+                                  ' l3miss ', ' ttl 64 ', ' ageing 100 '])
+        if self.backend == 'networkd':
+            # checksums are not supported on the NetworkManager backend
+            self.assert_iface('vx0', [' udpcsum ', ' udp6zerocsumtx ',
+                                      ' udp6zerocsumrx ', ' remcsumtx ',
+                                      ' remcsumrx '])
+
+
+@unittest.skipIf("networkd" not in test_backends,
+                 "skipping as networkd backend tests are disabled")
+class TestNetworkd(IntegrationTestsBase, _CommonTests):
+    backend = 'networkd'
 
     def test_tunnel_vti(self):
         self.addCleanup(subprocess.call, ['ip', 'link', 'delete', 'tun0'], stderr=subprocess.DEVNULL)
@@ -195,13 +271,7 @@ class TestNetworkd(IntegrationTestsBase, _CommonTests):
         self.generate_and_settle(['tun0'])
         self.assert_iface('tun0', ['tun0@NONE', 'link.* fe80::1 brd 2001:dead:beef::2'])
 
-
-@unittest.skipIf("NetworkManager" not in test_backends,
-                     "skipping as NetworkManager backend tests are disabled")
-class TestNetworkManager(IntegrationTestsBase, _CommonTests):
-    backend = 'NetworkManager'
-
-    def test_tunnel_gre(self):
+    def test_tunnel_gretap_with_keys(self):
         self.addCleanup(subprocess.call, ['ip', 'link', 'delete', 'tun0'], stderr=subprocess.DEVNULL)
         with open(self.config, 'w') as f:
             f.write('''network:
@@ -209,13 +279,41 @@ class TestNetworkManager(IntegrationTestsBase, _CommonTests):
   version: 2
   tunnels:
     tun0:
-      mode: gre
-      keys: 1234
+      mode: gretap
+      keys:
+        input: 1.2.3.4
+        output: 5.6.7.8
       local: 192.168.5.1
       remote: 99.99.99.99
 ''' % {'r': self.backend})
         self.generate_and_settle(['tun0'])
-        self.assert_iface('tun0', ['tun0@NONE', 'link.* 192.168.5.1 peer 99.99.99.99'])
+        out = subprocess.check_output(['ip', '-details', 'link', 'show', 'tun0'], universal_newlines=True)
+        self.assertIn("gretap remote 99.99.99.99 local 192.168.5.1", out)
+        self.assertIn("ikey 1.2.3.4 okey 5.6.7.8", out)
+
+    def test_tunnel_gretap6_with_keys(self):
+        self.addCleanup(subprocess.call, ['ip', 'link', 'delete', 'tun0'], stderr=subprocess.DEVNULL)
+        with open(self.config, 'w') as f:
+            f.write('''network:
+  renderer: %(r)s
+  version: 2
+  tunnels:
+    tun0:
+      mode: ip6gretap
+      keys: 1.2.3.4
+      local: fe80::1
+      remote: 2001:dead:beef::2
+''' % {'r': self.backend})
+        self.generate_and_settle(['tun0'])
+        out = subprocess.check_output(['ip', '-details', 'link', 'show', 'tun0'], universal_newlines=True)
+        self.assertIn("gretap remote 2001:dead:beef::2 local fe80::1", out)
+        self.assertIn("ikey 1.2.3.4 okey 1.2.3.4", out)
+
+
+@unittest.skipIf("NetworkManager" not in test_backends,
+                 "skipping as NetworkManager backend tests are disabled")
+class TestNetworkManager(IntegrationTestsBase, _CommonTests):
+    backend = 'NetworkManager'
 
 
 unittest.main(testRunner=unittest.TextTestRunner(stream=sys.stdout, verbosity=2))

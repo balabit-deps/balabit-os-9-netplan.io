@@ -32,8 +32,9 @@ import ctypes.util
 import yaml
 import difflib
 
-exe_generate = os.path.join(os.path.dirname(os.path.dirname(
-    os.path.dirname(os.path.abspath(__file__)))), 'generate')
+exe_generate = os.environ.get('NETPLAN_GENERATE_PATH',
+                              os.path.join(os.path.dirname(os.path.dirname(
+                                           os.path.dirname(os.path.abspath(__file__)))), 'generate'))
 
 # make sure we point to libnetplan properly.
 os.environ.update({'LD_LIBRARY_PATH': '.:{}'.format(os.environ.get('LD_LIBRARY_PATH'))})
@@ -66,9 +67,9 @@ standalone\nExecStart=/usr/bin/ovs-vsctl set Bridge %(iface)s mcast_snooping_ena
 Bridge %(iface)s external-ids:netplan/mcast_snooping_enable=false\nExecStart=/usr/bin/ovs-vsctl set Bridge %(iface)s \
 rstp_enable=false\nExecStart=/usr/bin/ovs-vsctl set Bridge %(iface)s external-ids:netplan/rstp_enable=false\n'
 OVS_BR_EMPTY = _OVS_BASE + 'After=netplan-ovs-cleanup.service\nBefore=network.target\nWants=network.target\n\n[Service]\n\
-Type=oneshot\nExecStart=/usr/bin/ovs-vsctl --may-exist add-br %(iface)s\n' + OVS_BR_DEFAULT
+Type=oneshot\nTimeoutStartSec=10s\nExecStart=/usr/bin/ovs-vsctl --may-exist add-br %(iface)s\n' + OVS_BR_DEFAULT
 OVS_CLEANUP = _OVS_BASE + 'ConditionFileIsExecutable=/usr/bin/ovs-vsctl\nBefore=network.target\nWants=network.target\n\n\
-[Service]\nType=oneshot\nExecStart=/usr/sbin/netplan apply --only-ovs-cleanup\n'
+[Service]\nType=oneshot\nTimeoutStartSec=10s\nExecStart=/usr/sbin/netplan apply --only-ovs-cleanup\n'
 UDEV_MAC_RULE = 'SUBSYSTEM=="net", ACTION=="add", DRIVERS=="%s", ATTR{address}=="%s", NAME="%s"\n'
 UDEV_NO_MAC_RULE = 'SUBSYSTEM=="net", ACTION=="add", DRIVERS=="%s", NAME="%s"\n'
 UDEV_SRIOV_RULE = 'ACTION=="add", SUBSYSTEM=="net", ATTRS{sriov_totalvfs}=="?*", RUN+="/usr/sbin/netplan apply --sriov-only"\n'
@@ -79,6 +80,8 @@ NM_WG = '[connection]\nid=netplan-wg0\ntype=wireguard\ninterface-name=wg0\n\n[wi
 2001:de:ad:be:ef:ca:fe:1/128\nip6-privacy=0\n'
 ND_WG = '[NetDev]\nName=wg0\nKind=wireguard\n\n[WireGuard]\nPrivateKey%s\nListenPort=%s\n%s\n'
 ND_VLAN = '[NetDev]\nName=%s\nKind=vlan\n\n[VLAN]\nId=%d\n'
+ND_VXLAN = '[NetDev]\nName=%s\nKind=vxlan\n\n[VXLAN]\nVNI=%d\n'
+ND_VRF = '[NetDev]\nName=%s\nKind=vrf\n\n[VRF]\nTable=%d\n'
 SD_WPA = '''[Unit]
 Description=WPA supplicant for netplan %(iface)s
 DefaultDependencies=no
@@ -91,6 +94,12 @@ Wants=network.target
 Type=simple
 ExecStart=/sbin/wpa_supplicant -c /run/netplan/wpa-%(iface)s.conf -i%(iface)s -D%(drivers)s
 '''
+NM_MANAGED = 'SUBSYSTEM=="net", ACTION=="add|change|move", ENV{ID_NET_NAME}=="%s", ENV{NM_UNMANAGED}="0"\n'
+NM_UNMANAGED = 'SUBSYSTEM=="net", ACTION=="add|change|move", ENV{ID_NET_NAME}=="%s", ENV{NM_UNMANAGED}="1"\n'
+NM_MANAGED_MAC = 'SUBSYSTEM=="net", ACTION=="add|change|move", ATTR{address}=="%s", ENV{NM_UNMANAGED}="0"\n'
+NM_UNMANAGED_MAC = 'SUBSYSTEM=="net", ACTION=="add|change|move", ATTR{address}=="%s", ENV{NM_UNMANAGED}="1"\n'
+NM_MANAGED_DRIVER = 'SUBSYSTEM=="net", ACTION=="add|change|move", ENV{ID_NET_DRIVER}=="%s", ENV{NM_UNMANAGED}="0"\n'
+NM_UNMANAGED_DRIVER = 'SUBSYSTEM=="net", ACTION=="add|change|move", ENV{ID_NET_DRIVER}=="%s", ENV{NM_UNMANAGED}="1"\n'
 
 
 class NetplanV2Normalizer():
@@ -431,7 +440,12 @@ class TestBase(unittest.TestCase):
             self.assertFalse(os.path.exists(rule_path))
             return
         with open(rule_path) as f:
-            self.assertEqual(f.read(), contents)
+            lines = []
+            for line in f.readlines():
+                # ignore any comment in udev rules.d file
+                if not line.startswith('#'):
+                    lines.append(line)
+            self.assertEqual(''.join(lines), contents)
 
     def assert_ovs(self, file_contents_map):
         systemd_dir = os.path.join(self.workdir.name, 'run', 'systemd', 'system')

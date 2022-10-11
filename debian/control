@@ -4,10 +4,11 @@ XSBC-Original-Maintainer: Debian netplan Maintainers <team+netplan@tracker.debia
 Uploaders:
  Andrej Shadura <andrewsh@debian.org>,
  Mathieu Trudel-Lapierre <mathieu.tl@gmail.com>,
- Łukasz 'sil2100' Zemczak <lukasz.zemczak@canonical.com>
+ Łukasz 'sil2100' Zemczak <lukasz.zemczak@canonical.com>,
+ Lukas Märdian <luk@slyon.de>
 Section: net
 Priority: optional
-Standards-Version: 4.6.0
+Standards-Version: 4.6.1
 Rules-Requires-Root: no
 Build-Depends:
  debhelper-compat (= 13),
@@ -16,7 +17,7 @@ Build-Depends:
  libyaml-dev,
  libglib2.0-dev,
  uuid-dev,
- python3 (>= 3.1),
+ python3,
  python3-coverage <!nocheck>,
  python3-yaml <!nocheck>,
  python3-netifaces <!nocheck>,
@@ -28,8 +29,8 @@ Build-Depends:
  python3-nose <!nocheck>,
  pandoc,
  openvswitch-switch <!nocheck>,
-Vcs-Git: https://salsa.debian.org/debian/netplan.io.git
-Vcs-Browser: https://salsa.debian.org/debian/netplan.io
+Vcs-Git: https://git.launchpad.net/~ubuntu-core-dev/netplan/+git/ubuntu
+Vcs-Browser: https://git.launchpad.net/~ubuntu-core-dev/netplan/+git/ubuntu
 Homepage: https://netplan.io/
 
 Package: netplan.io
@@ -47,8 +48,9 @@ Depends:
 Suggests:
  network-manager | wpasupplicant,
  openvswitch-switch,
+ iw,
 Conflicts: netplan
-Breaks: nplan (<< 0.34~), network-manager (<< 1.2.2-1)
+Breaks: nplan (<< 0.34~)
 Replaces: nplan (<< 0.34~)
 Provides: nplan
 Description: YAML network configuration abstraction for various backends

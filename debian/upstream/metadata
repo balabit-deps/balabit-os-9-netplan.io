@@ -1,6 +1,7 @@
+---
 Bug-Database: https://bugs.launchpad.net/netplan
 Bug-Submit: https://bugs.launchpad.net/netplan/+filebug
 Changelog: https://github.com/canonical/netplan/commits/master
 Other-References: https://netplan.io
-Repository-Browse: https://github.com/canonical/netplan
 Repository: https://github.com/canonical/netplan.git
+Repository-Browse: https://github.com/canonical/netplan

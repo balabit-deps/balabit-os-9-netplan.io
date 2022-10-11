@@ -204,10 +204,12 @@ validate_tunnel_grammar(const NetplanParser* npp, NetplanNetDefinition* nd, yaml
     }
 
     /* Validate local/remote IPs */
-    if (!nd->tunnel.local_ip)
-        return yaml_error(npp, node, error, "%s: missing 'local' property for tunnel", nd->id);
-    if (!nd->tunnel.remote_ip)
-        return yaml_error(npp, node, error, "%s: missing 'remote' property for tunnel", nd->id);
+    if (nd->tunnel.mode != NETPLAN_TUNNEL_MODE_VXLAN) {
+        if (!nd->tunnel.local_ip)
+            return yaml_error(npp, node, error, "%s: missing 'local' property for tunnel", nd->id);
+        if (!nd->tunnel.remote_ip)
+            return yaml_error(npp, node, error, "%s: missing 'remote' property for tunnel", nd->id);
+    }
     if (nd->tunnel_ttl && nd->tunnel_ttl > 255)
         return yaml_error(npp, node, error, "%s: 'ttl' property for tunnel must be in range [1...255]", nd->id);
 
@@ -221,6 +223,12 @@ validate_tunnel_grammar(const NetplanParser* npp, NetplanNetDefinition* nd, yaml
                 return yaml_error(npp, node, error, "%s: 'local' must be a valid IPv6 address for this tunnel type", nd->id);
             if (!is_ip6_address(nd->tunnel.remote_ip))
                 return yaml_error(npp, node, error, "%s: 'remote' must be a valid IPv6 address for this tunnel type", nd->id);
+            break;
+
+        case NETPLAN_TUNNEL_MODE_VXLAN:
+            if ((nd->tunnel.local_ip && nd->tunnel.remote_ip) &&
+                (is_ip6_address(nd->tunnel.local_ip) != is_ip6_address(nd->tunnel.remote_ip)))
+                return yaml_error(npp, node, error, "%s: 'local' and 'remote' must be of same IP family type", nd->id);
             break;
 
         default:
@@ -244,6 +252,10 @@ validate_tunnel_backend_rules(const NetplanParser* npp, NetplanNetDefinition* nd
                 case NETPLAN_TUNNEL_MODE_VTI:
                 case NETPLAN_TUNNEL_MODE_VTI6:
                 case NETPLAN_TUNNEL_MODE_WIREGUARD:
+                case NETPLAN_TUNNEL_MODE_GRE:
+                case NETPLAN_TUNNEL_MODE_IP6GRE:
+                case NETPLAN_TUNNEL_MODE_GRETAP:
+                case NETPLAN_TUNNEL_MODE_IP6GRETAP:
                     break;
 
                 /* TODO: Remove this exception and fix ISATAP handling with the
@@ -325,6 +337,24 @@ validate_netdef_grammar(const NetplanParser* npp, NetplanNetDefinition* nd, yaml
             return yaml_error(npp, node, error, "%s: missing 'id' property", nd->id);
         if (nd->vlan_id > 4094)
             return yaml_error(npp, node, error, "%s: invalid id '%u' (allowed values are 0 to 4094)", nd->id, nd->vlan_id);
+    }
+
+    if (nd->type == NETPLAN_DEF_TYPE_TUNNEL &&
+        nd->tunnel.mode == NETPLAN_TUNNEL_MODE_VXLAN) {
+        if (nd->vxlan->vni == 0)
+            return yaml_error(npp, node, error,
+                              "%s: missing 'id' property (VXLAN VNI)", nd->id);
+        if (nd->vxlan->vni < 1 || nd->vxlan->vni > 16777215)
+            return yaml_error(npp, node, error, "%s: VXLAN 'id' (VNI) "
+                              "must be in range [1..16777215]", nd->id);
+        if (nd->vxlan->flow_label != G_MAXUINT && nd->vxlan->flow_label > 1048575)
+            return yaml_error(npp, node, error, "%s: VXLAN 'flow-label' "
+                              "must be in range [0..1048575]", nd->id);
+    }
+
+    if (nd->type == NETPLAN_DEF_TYPE_VRF) {
+        if (nd->vrf_table == G_MAXUINT)
+            return yaml_error(npp, node, error, "%s: missing 'table' property", nd->id);
     }
 
     if (nd->type == NETPLAN_DEF_TYPE_TUNNEL) {
@@ -413,6 +443,53 @@ validate_sriov_rules(const NetplanParser* npp, NetplanNetDefinition* nd, GError*
 
 sriov_rules_error:
     return valid;
+}
+
+gboolean
+adopt_and_validate_vrf_routes(const NetplanParser *npp, GHashTable *netdefs, GError **error)
+{
+    gpointer key, value;
+    GHashTableIter iter;
+
+    g_hash_table_iter_init (&iter, netdefs);
+    while (g_hash_table_iter_next (&iter, &key, &value))
+    {
+        NetplanNetDefinition *nd = value;
+        if (nd->type != NETPLAN_DEF_TYPE_VRF || !nd->routes)
+            continue;
+
+        /* Routes */
+        for (size_t i = 0; i < nd->routes->len; i++) {
+            NetplanIPRoute* r = g_array_index(nd->routes, NetplanIPRoute*, i);
+            if (r->table == nd->vrf_table) {
+                g_debug("%s: Ignoring redundant routes table %d (matches VRF table)", nd->id, r->table);
+                continue;
+            } else if (r->table != NETPLAN_ROUTE_TABLE_UNSPEC) {
+                g_set_error(error, G_MARKUP_ERROR, G_MARKUP_ERROR_INVALID_CONTENT,
+                            "%s: VRF routes table mismatch (%d != %d)", nd->id, nd->vrf_table, r->table);
+                return FALSE;
+            } else {
+                r->table = nd->vrf_table;
+                g_debug("%s: Adopted VRF routes table to %d", nd->id, nd->vrf_table);
+            }
+        }
+        /* IP Rules */
+        for (size_t i = 0; i < nd->ip_rules->len; i++) {
+            NetplanIPRule* r = g_array_index(nd->ip_rules, NetplanIPRule*, i);
+            if (r->table == nd->vrf_table) {
+                g_debug("%s: Ignoring redundant routing-policy table %d (matches VRF table)", nd->id, r->table);
+                continue;
+            } else if (r->table != NETPLAN_ROUTE_TABLE_UNSPEC && r->table != nd->vrf_table) {
+                g_set_error(error, G_MARKUP_ERROR, G_MARKUP_ERROR_INVALID_CONTENT,
+                            "%s: VRF routing-policy table mismatch (%d != %d)", nd->id, nd->vrf_table, r->table);
+                return FALSE;
+            } else {
+                r->table = nd->vrf_table;
+                g_debug("%s: Adopted VRF routing-policy table to %d", nd->id, nd->vrf_table);
+            }
+        }
+    }
+    return TRUE;
 }
 
 struct _defroute_entry {

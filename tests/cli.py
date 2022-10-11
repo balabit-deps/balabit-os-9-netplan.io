@@ -23,17 +23,28 @@ import subprocess
 import unittest
 import tempfile
 import shutil
-
 import yaml
+
+from tests.test_utils import MockCmd
 
 rootdir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 exe_cli = [os.path.join(rootdir, 'src', 'netplan.script')]
 if shutil.which('python3-coverage'):
     exe_cli = ['python3-coverage', 'run', '--append', '--'] + exe_cli
 
-# Make sure we can import our development netplan.
-os.environ.update({'PYTHONPATH': '.'})
 os.environ.update({'LD_LIBRARY_PATH': '.:{}'.format(os.environ.get('LD_LIBRARY_PATH'))})
+
+# combined the output of 'nmcli dev' and 'nmcli con' into a single mock output,
+# connected via FAKE_NM_ID. Both are parsed line by line, checking for
+# 'GENERAL.CONNECTION' or 'connection.id/uuid' respectively
+nmcli_mock_output = '''
+# nmcli dev ... MOCK OUTPUT:
+GENERAL.CONNECTION:                     FAKE_NM_ID
+
+# nmcli con ... MOCK OUTPUT:
+connection.id:                          FAKE_NM_ID
+connection.uuid:                        00000000-0000-0000-0000-000000000000
+'''
 
 
 def _load_yaml(text):
@@ -54,7 +65,7 @@ class TestArgs(unittest.TestCase):
         self.assertIn(b'--root-dir', out)
 
     def test_no_command(self):
-        os.environ['NETPLAN_GENERATE_PATH'] = os.path.join(rootdir, 'generate')
+        os.environ.setdefault('NETPLAN_GENERATE_PATH', os.path.join(rootdir, 'generate'))
         p = subprocess.Popen(exe_cli, stdout=subprocess.PIPE,
                              stderr=subprocess.PIPE)
         (out, err) = p.communicate()
@@ -102,7 +113,7 @@ class TestGenerate(unittest.TestCase):
                          ['10-netplan-enlol.network'])
 
     def test_mapping_for_unknown_iface(self):
-        os.environ['NETPLAN_GENERATE_PATH'] = os.path.join(rootdir, 'generate')
+        os.environ.setdefault('NETPLAN_GENERATE_PATH', os.path.join(rootdir, 'generate'))
         c = os.path.join(self.workdir.name, 'etc', 'netplan')
         os.makedirs(c)
         with open(os.path.join(c, 'a.yaml'), 'w') as f:
@@ -118,7 +129,7 @@ class TestGenerate(unittest.TestCase):
         self.assertNotIn(b'nonexistent', out)
 
     def test_mapping_for_interface(self):
-        os.environ['NETPLAN_GENERATE_PATH'] = os.path.join(rootdir, 'generate')
+        os.environ.setdefault('NETPLAN_GENERATE_PATH', os.path.join(rootdir, 'generate'))
         c = os.path.join(self.workdir.name, 'etc', 'netplan')
         os.makedirs(c)
         with open(os.path.join(c, 'a.yaml'), 'w') as f:
@@ -132,7 +143,7 @@ class TestGenerate(unittest.TestCase):
         self.assertIn('enlol', out.decode('utf-8'))
 
     def test_mapping_for_renamed_iface(self):
-        os.environ['NETPLAN_GENERATE_PATH'] = os.path.join(rootdir, 'generate')
+        os.environ.setdefault('NETPLAN_GENERATE_PATH', os.path.join(rootdir, 'generate'))
         c = os.path.join(self.workdir.name, 'etc', 'netplan')
         os.makedirs(c)
         with open(os.path.join(c, 'a.yaml'), 'w') as f:
@@ -609,7 +620,7 @@ class TestIp(unittest.TestCase):
         self.assertNotEqual(p.returncode, 0)
 
     def test_ip_leases_networkd(self):
-        os.environ['NETPLAN_GENERATE_PATH'] = os.path.join(rootdir, 'generate')
+        os.environ.setdefault('NETPLAN_GENERATE_PATH', os.path.join(rootdir, 'generate'))
         c = os.path.join(self.workdir.name, 'etc', 'netplan')
         os.makedirs(c)
         with open(os.path.join(c, 'a.yaml'), 'w') as f:
@@ -636,11 +647,92 @@ class TestIp(unittest.TestCase):
         self.assertIn('FAKE NETIF', out.decode('utf-8'))
 
     def test_ip_leases_nm(self):
-        unittest.skip("Cannot be tested offline due to calls required to nmcli."
-                      "This is tested in integration tests.")
+        os.environ.setdefault('NETPLAN_GENERATE_PATH',
+                              os.path.join(rootdir, 'generate'))
+        mock = MockCmd('nmcli')
+        mock.set_output(nmcli_mock_output)
+        new_path = os.pathsep.join([os.path.dirname(mock.path),
+                                    os.environ.get('PATH', os.defpath)])
+        mock_env = dict(os.environ, PATH=new_path)
+
+        c = os.path.join(self.workdir.name, 'etc', 'netplan')
+        os.makedirs(c)
+        with open(os.path.join(c, 'a.yaml'), 'w') as f:
+            f.write('''network:
+  version: 2
+  renderer: NetworkManager
+  ethernets: {lo: {dhcp4: yes}}
+''')
+        fake_lease_dir = os.path.join(self.workdir.name,
+                                      'var', 'lib', 'NetworkManager')
+        os.makedirs(fake_lease_dir)
+        # using fake '0000..' UUID from nmcli_mock_output
+        lease_file = 'internal-00000000-0000-0000-0000-000000000000-lo.lease'
+        with open(os.path.join(fake_lease_dir, lease_file), 'w') as f:
+            f.write('''THIS IS A FAKE INTERNAL_NM LEASE FOR LO''')
+        out = subprocess.check_output(exe_cli +
+                                      ['ip', 'leases',
+                                       '--root-dir', self.workdir.name, 'lo'],
+                                      env=mock_env)
+        self.assertIn('FAKE INTERNAL_NM LEASE', out.decode('utf-8'))
+
+    def test_ip_leases_nm_dhclient_fallback(self):
+        os.environ.setdefault('NETPLAN_GENERATE_PATH',
+                              os.path.join(rootdir, 'generate'))
+        mock = MockCmd('nmcli')
+        mock.set_output(nmcli_mock_output)
+        new_path = os.pathsep.join([os.path.dirname(mock.path),
+                                    os.environ.get('PATH', os.defpath)])
+        mock_env = dict(os.environ, PATH=new_path)
+
+        c = os.path.join(self.workdir.name, 'etc', 'netplan')
+        os.makedirs(c)
+        with open(os.path.join(c, 'a.yaml'), 'w') as f:
+            f.write('''network:
+  version: 2
+  renderer: NetworkManager
+  ethernets: {lo: {dhcp4: yes}}
+''')
+        fake_lease_dir = os.path.join(self.workdir.name,
+                                      'var', 'lib', 'NetworkManager')
+        os.makedirs(fake_lease_dir)
+        # using fake '0000..' UUID from nmcli_mock_output
+        lease_file = 'dhclient-00000000-0000-0000-0000-000000000000-lo.lease'
+        with open(os.path.join(fake_lease_dir, lease_file), 'w') as f:
+            f.write('''THIS IS A FAKE DHCLIENT_NM LEASE FOR LO''')
+        out = subprocess.check_output(exe_cli +
+                                      ['ip', 'leases',
+                                       '--root-dir', self.workdir.name, 'lo'],
+                                      env=mock_env)
+        self.assertIn('FAKE DHCLIENT_NM LEASE', out.decode('utf-8'))
+
+    def test_ip_leases_nm_fail(self):
+        os.environ.setdefault('NETPLAN_GENERATE_PATH',
+                              os.path.join(rootdir, 'generate'))
+        mock = MockCmd('nmcli')
+        mock.set_output(nmcli_mock_output)
+        mock.set_returncode(10)
+        new_path = os.pathsep.join([os.path.dirname(mock.path),
+                                    os.environ.get('PATH', os.defpath)])
+        mock_env = dict(os.environ, PATH=new_path)
+
+        c = os.path.join(self.workdir.name, 'etc', 'netplan')
+        os.makedirs(c)
+        with open(os.path.join(c, 'a.yaml'), 'w') as f:
+            f.write('''network:
+  version: 2
+  renderer: NetworkManager
+  ethernets: {lo: {dhcp4: yes}}
+''')
+        # the nmcli Mock's return value is 10, indicating an error
+        with self.assertRaises(Exception):
+            subprocess.check_output(exe_cli +
+                                    ['ip', 'leases',
+                                     '--root-dir', self.workdir.name, 'lo'],
+                                    env=mock_env)
 
     def test_ip_leases_no_networkd_lease(self):
-        os.environ['NETPLAN_GENERATE_PATH'] = os.path.join(rootdir, 'generate')
+        os.environ.setdefault('NETPLAN_GENERATE_PATH', os.path.join(rootdir, 'generate'))
         c = os.path.join(self.workdir.name, 'etc', 'netplan')
         os.makedirs(c)
         with open(os.path.join(c, 'a.yaml'), 'w') as f:
@@ -664,12 +756,16 @@ class TestIp(unittest.TestCase):
         self.assertNotEqual(p.returncode, 0)
 
     def test_ip_leases_no_nm_lease(self):
-        os.environ['NETPLAN_GENERATE_PATH'] = os.path.join(rootdir, 'generate')
+        os.environ.setdefault('NETPLAN_GENERATE_PATH', os.path.join(rootdir, 'generate'))
+        mock = MockCmd('nmcli')
+        mock.set_output('\n')
+        new_path = os.pathsep.join([os.path.dirname(mock.path),
+                                    os.environ.get('PATH', os.defpath)])
+        mock_env = dict(os.environ, PATH=new_path)
+
         c = os.path.join(self.workdir.name, 'etc', 'netplan')
         os.makedirs(c)
         with open(os.path.join(c, 'a.yaml'), 'w') as f:
-            # match against loopback so as to successfully get a predictable
-            # ifindex
             f.write('''network:
   version: 2
   renderer: NetworkManager
@@ -679,10 +775,11 @@ class TestIp(unittest.TestCase):
         name: lo
       dhcp4: yes
 ''')
+        # we didn't create a (mock) lease file, therefore expect stderr output
         p = subprocess.Popen(exe_cli +
                              ['ip', 'leases', '--root-dir', self.workdir.name, 'enlol'],
-                             stdout=subprocess.PIPE,
-                             stderr=subprocess.PIPE)
+                             stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                             env=mock_env)
         (out, err) = p.communicate()
         self.assertEqual(out, b'')
         self.assertIn(b'No lease found', err)

@@ -156,13 +156,13 @@ class NetplanApply(utils.NetplanCommand):
         if not restart_nm and old_files_nm:
             restart_nm = True
 
+        # Running 'systemctl daemon-reload' will re-run the netplan systemd generator,
+        # so let's make sure we only run it iff we're willing to run 'netplan generate'
+        if run_generate:
+            utils.systemctl_daemon_reload()
         # stop backends
         if restart_networkd:
             logging.debug('netplan generated networkd configuration changed, reloading networkd')
-            # Running 'systemctl daemon-reload' will re-run the netplan systemd generator,
-            # so let's make sure we only run it iff we're willing to run 'netplan generate'
-            if run_generate:
-                utils.systemctl_daemon_reload()
             # Clean up any old netplan related OVS ports/bonds/bridges, if applicable
             NetplanApply.process_ovs_cleanup(config_manager, old_files_ovs, restart_ovs, exit_on_error)
             wpa_services = ['netplan-wpa-*.service']
@@ -221,13 +221,22 @@ class NetplanApply(utils.NetplanCommand):
                                        '/sys/class/net/' + device],
                                       stdout=subprocess.DEVNULL,
                                       stderr=subprocess.DEVNULL)
+                subprocess.check_call(['udevadm', 'test',
+                                       '/sys/class/net/' + device],
+                                      stdout=subprocess.DEVNULL,
+                                      stderr=subprocess.DEVNULL)
             except subprocess.CalledProcessError:
                 logging.debug('Ignoring device without syspath: %s', device)
 
+        devices_after_udev = netifaces.interfaces()
         # apply some more changes manually
         for iface, settings in changes.items():
             # rename non-critical network interfaces
-            if settings.get('name'):
+            new_name = settings.get('name')
+            if new_name:
+                if iface in devices and new_name in devices_after_udev:
+                    logging.debug('Interface rename {} -> {} already happened.'.format(iface, new_name))
+                    continue  # re-name already happened via 'udevadm test'
                 # bring down the interface, using its current (matched) interface name
                 subprocess.check_call(['ip', 'link', 'set', 'dev', iface, 'down'],
                                       stdout=subprocess.DEVNULL,
@@ -239,11 +248,17 @@ class NetplanApply(utils.NetplanCommand):
                                       stdout=subprocess.DEVNULL,
                                       stderr=subprocess.DEVNULL)
 
+        # Reloading of udev rules happens during 'netplan generate' already
+        # subprocess.check_call(['udevadm', 'control', '--reload-rules'])
+        subprocess.check_call(['udevadm', 'trigger', '--attr-match=subsystem=net'])
         subprocess.check_call(['udevadm', 'settle'])
 
         # apply any SR-IOV related changes, if applicable
         NetplanApply.process_sriov_config(config_manager, exit_on_error)
 
+        # (re)set global regulatory domain
+        if os.path.exists('/run/systemd/system/netplan-regdom.service'):
+            utils.systemctl('start', ['netplan-regdom.service'])
         # (re)start backends
         if restart_networkd:
             netplan_wpa = [os.path.basename(f) for f in glob.glob('/run/systemd/system/*.wants/netplan-wpa-*.service')]
@@ -252,7 +267,13 @@ class NetplanApply(utils.NetplanCommand):
                            if not f.endswith('/' + OVS_CLEANUP_SERVICE)]
             # Run 'systemctl start' command synchronously, to avoid race conditions
             # with 'oneshot' systemd service units, e.g. netplan-ovs-*.service.
-            utils.networkctl_reconfigure(utils.networkd_interfaces())
+            try:
+                utils.networkctl_reload()
+                utils.networkctl_reconfigure(utils.networkd_interfaces())
+            except subprocess.CalledProcessError:
+                # (re-)start systemd-networkd if it is not running, yet
+                logging.warning('Falling back to a hard restart of systemd-networkd.service')
+                utils.systemctl('restart', ['systemd-networkd.service'], sync=True)
             # 1st: execute OVS cleanup, to avoid races while applying OVS config
             utils.systemctl('start', [OVS_CLEANUP_SERVICE], sync=True)
             # 2nd: start all other services
@@ -262,6 +283,9 @@ class NetplanApply(utils.NetplanCommand):
             # new, non netplan-* connection profiles, using the existing IPs.
             for iface in utils.nm_interfaces(restart_nm_glob, devices):
                 utils.ip_addr_flush(iface)
+            # clear NM state, especially the [device].managed=true config, as that might have been
+            # re-set via an udev rule setting "NM_UNMANAGED=1"
+            subprocess.check_call(['rm', '-rf', '/run/NetworkManager/devices'])
             utils.systemctl_network_manager('start', sync=sync)
             if sync:
                 # wait up to 2 sec for 'STATE=connected (site/local-only)' or
@@ -317,45 +341,41 @@ class NetplanApply(utils.NetplanCommand):
         return dropped_interfaces
 
     @staticmethod
-    def process_link_changes(interfaces, config_manager):  # pragma: nocover (covered in autopkgtest)
+    def process_link_changes(interfaces, config_manager: ConfigManager):  # pragma: nocover (covered in autopkgtest)
         """
         Go through the pending changes and pick what needs special handling.
         Only applies to non-critical interfaces which can be safely updated.
         """
 
         changes = {}
-        phys = dict(config_manager.physical_interfaces)
         composite_interfaces = [config_manager.bridges, config_manager.bonds]
 
         # Find physical interfaces which need a rename
         # But do not rename virtual interfaces
-        for phy, settings in phys.items():
-            if not settings or not isinstance(settings, dict):
-                continue  # Skip special values, like "renderer: ..."
-            newname = settings.get('set-name')
+        for netdef in config_manager.physical_interfaces.values():
+            newname = netdef.set_name
             if not newname:
                 continue  # Skip if no new name needs to be set
-            match = settings.get('match')
-            if not match:
+            if not netdef.has_match:
                 continue  # Skip if no match for current name is given
-            if NetplanApply.is_composite_member(composite_interfaces, phy):
-                logging.debug('Skipping composite member {}'.format(phy))
+            if NetplanApply.is_composite_member(composite_interfaces, netdef.id):
+                logging.debug('Skipping composite member {}'.format(netdef.id))
                 # do not rename members of virtual devices. MAC addresses
                 # may be the same for all interface members.
                 continue
             # Find current name of the interface, according to match conditions and globs (name, mac, driver)
-            current_iface_name = utils.find_matching_iface(interfaces, match)
+            current_iface_name = utils.find_matching_iface(interfaces, netdef)
             if not current_iface_name:
-                logging.warning('Cannot find unique matching interface for {}: {}'.format(phy, match))
+                logging.warning('Cannot find unique matching interface for {}'.format(netdef.id))
                 continue
             if current_iface_name == newname:
                 # Skip interface if it already has the correct name
                 logging.debug('Skipping correctly named interface: {}'.format(newname))
                 continue
-            if settings.get('critical', False):
+            if netdef.critical:
                 # Skip interfaces defined as critical, as we should not take them down in order to rename
                 logging.warning('Cannot rename {} ({} -> {}) at runtime (needs reboot), due to being critical'
-                                .format(phy, current_iface_name, newname))
+                                .format(netdef.id, current_iface_name, newname))
                 continue
 
             # record the interface rename change
@@ -368,7 +388,7 @@ class NetplanApply(utils.NetplanCommand):
     def process_sriov_config(config_manager, exit_on_error=True):  # pragma: nocover (covered in autopkgtest)
         try:
             apply_sriov_config(config_manager)
-        except (ConfigurationError, RuntimeError) as e:
+        except utils.config_errors as e:
             logging.error(str(e))
             if exit_on_error:
                 sys.exit(1)

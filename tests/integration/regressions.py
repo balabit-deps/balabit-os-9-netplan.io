@@ -1,5 +1,5 @@
 #!/usr/bin/python3
-# 
+#
 # Regression tests to catch previously-fixed issues.
 #
 # These need to be run in a VM and do change the system
@@ -39,7 +39,7 @@ class _CommonTests():
 
 
 @unittest.skipIf("networkd" not in test_backends,
-                     "skipping as networkd backend tests are disabled")
+                 "skipping as networkd backend tests are disabled")
 class TestNetworkd(IntegrationTestsBase, _CommonTests):
     backend = 'networkd'
 
@@ -96,9 +96,9 @@ class TestNetworkd(IntegrationTestsBase, _CommonTests):
         self.assertEqual('', err)
         self.assertNotIn('An error occurred:', out)
         self.assertRegex(out.strip(), r'Do you want to keep these settings\?\n\n\n'
-r'Press ENTER before the timeout to accept the new configuration\n\n\n'
-r'(Changes will revert in \d+ seconds\n)+'
-r'Configuration accepted\.')
+                         r'Press ENTER before the timeout to accept the new configuration\n\n\n'
+                         r'(Changes will revert in \d+ seconds\n)+'
+                         r'Configuration accepted\.')
 
     def test_try_reject_lp1949095(self):
         with open(self.config, 'w') as f:
@@ -114,13 +114,30 @@ r'Configuration accepted\.')
         self.assertEqual('', err)
         self.assertNotIn('An error occurred:', out)
         self.assertRegex(out.strip(), r'Do you want to keep these settings\?\n\n\n'
-r'Press ENTER before the timeout to accept the new configuration\n\n\n'
-r'(Changes will revert in \d+ seconds\n)+'
-r'Reverting\.')
+                         r'Press ENTER before the timeout to accept the new configuration\n\n\n'
+                         r'(Changes will revert in \d+ seconds\n)+'
+                         r'Reverting\.')
+
+    def test_apply_networkd_inactive_lp1962095(self):
+        self.setup_eth(None)
+        with open(self.config, 'w') as f:
+            f.write('''network:
+  renderer: %(r)s
+  ethernets:
+    %(ec)s:
+      dhcp4: true
+    %(e2c)s:
+      dhcp4: true
+  version: 2''' % {'r': self.backend, 'ec': self.dev_e_client, 'e2c': self.dev_e2_client})
+        # stop networkd to simulate the failure case
+        subprocess.check_call(['systemctl', 'stop', 'systemd-networkd.service', 'systemd-networkd.socket'])
+        self.generate_and_settle([self.state_dhcp4(self.dev_e_client), self.state_dhcp4(self.dev_e2_client)])
+        self.assert_iface_up(self.dev_e_client, ['inet 192.168.5.[0-9]+/24'])
+        self.assert_iface_up(self.dev_e2_client, ['inet 192.168.6.[0-9]+/24'])
 
 
 @unittest.skipIf("NetworkManager" not in test_backends,
-                     "skipping as NetworkManager backend tests are disabled")
+                 "skipping as NetworkManager backend tests are disabled")
 class TestNetworkManager(IntegrationTestsBase, _CommonTests):
     backend = 'NetworkManager'
 

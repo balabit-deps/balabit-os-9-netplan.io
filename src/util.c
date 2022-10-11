@@ -18,7 +18,9 @@
 #include <stdlib.h>
 #include <unistd.h>
 #include <arpa/inet.h>
+#include <fnmatch.h>
 #include <errno.h>
+#include <string.h>
 
 #include <glib.h>
 #include <glib/gprintf.h>
@@ -120,6 +122,114 @@ int find_yaml_glob(const char* rootdir, glob_t* out_glob)
     }
 
     return 0;
+}
+
+
+/**
+ * create a yaml patch from a "set expression"
+ *
+ * A "set expression" here consists of a path formed of TAB-separated
+ * keys, indicating where in the YAML doc we want to make our changes, and
+ * a valid YAML expression that will be the payload to insert at that
+ * place. The result is a well-formed YAML document.
+ *
+ * @conf_obj_path: TAB-separated YAML path
+ * @obj_payload: YAML expression
+ * @output_file: file path to write out the result document
+ */
+
+gboolean
+netplan_util_create_yaml_patch(const char* conf_obj_path, const char* obj_payload, int output_fd, GError** error)
+{
+	yaml_emitter_t emitter;
+	yaml_parser_t parser;
+	yaml_event_t event;
+	int token_depth = 0;
+    int out_dup = -1;
+    FILE* out_stream = NULL;
+    int ret = FALSE;
+
+    out_dup = dup(output_fd);
+    if (out_dup < 0)
+        goto file_error; // LCOV_EXCL_LINE
+    out_stream = fdopen(out_dup, "w");
+    if (!out_stream)
+        goto file_error; // LCOV_EXCL_LINE
+
+    yaml_emitter_initialize(&emitter);
+    yaml_emitter_set_output_file(&emitter, out_stream);
+    yaml_stream_start_event_initialize(&event, YAML_UTF8_ENCODING);
+    if (!yaml_emitter_emit(&emitter, &event))
+        goto err_path; // LCOV_EXCL_LINE
+    yaml_document_start_event_initialize(&event, NULL, NULL, NULL, 1);
+    if (!yaml_emitter_emit(&emitter, &event))
+        goto err_path; // LCOV_EXCL_LINE
+
+    char **tokens = g_strsplit_set(conf_obj_path, "\t", -1);
+	for (; tokens[token_depth] != NULL; token_depth++) {
+        YAML_MAPPING_OPEN(&event, &emitter);
+        YAML_SCALAR_PLAIN(&event, &emitter, tokens[token_depth]);
+    }
+    g_strfreev(tokens);
+
+    yaml_parser_initialize(&parser);
+    yaml_parser_set_input_string(&parser, (const unsigned char *)obj_payload, strlen(obj_payload));
+    while (TRUE) {
+        if (!yaml_parser_parse(&parser, &event)) {
+            g_set_error(error, G_MARKUP_ERROR, G_MARKUP_ERROR_INVALID_CONTENT, "Error parsing YAML: %s", parser.problem);
+            goto cleanup;
+        }
+        if (event.type == YAML_STREAM_END_EVENT || event.type == YAML_DOCUMENT_END_EVENT)
+            break;
+        switch (event.type) {
+            case YAML_STREAM_START_EVENT:
+            case YAML_DOCUMENT_START_EVENT:
+                break;
+            case YAML_MAPPING_START_EVENT:
+                YAML_MAPPING_OPEN(&event, &emitter);
+                break;
+            case YAML_SEQUENCE_START_EVENT:
+                YAML_SEQUENCE_OPEN(&event, &emitter);
+                break;
+            default:
+                if (!yaml_emitter_emit(&emitter, &event))
+                    goto err_path; // LCOV_EXCL_LINE
+        }
+	}
+
+	for (; token_depth > 0; token_depth--)
+        YAML_MAPPING_CLOSE(&event, &emitter);
+
+    yaml_document_end_event_initialize(&event, 1);
+    if (!yaml_emitter_emit(&emitter, &event))
+        goto err_path; // LCOV_EXCL_LINE
+    yaml_stream_end_event_initialize(&event);
+    if (!yaml_emitter_emit(&emitter, &event))
+        goto err_path; // LCOV_EXCL_LINE
+    yaml_emitter_flush(&emitter);
+    fflush(out_stream);
+    ret = TRUE;
+    goto cleanup;
+
+// LCOV_EXCL_START
+err_path:
+    g_set_error(error, G_MARKUP_ERROR, G_MARKUP_ERROR_INVALID_CONTENT, "Error generating YAML: %s", emitter.problem);
+    ret = FALSE;
+// LCOV_EXCL_STOP
+cleanup:
+    /* also closes the dup FD */
+    fclose(out_stream);
+    yaml_emitter_delete(&emitter);
+    yaml_parser_delete(&parser);
+    return ret;
+
+// LCOV_EXCL_START
+file_error:
+    g_set_error(error, G_FILE_ERROR, errno, "Error when opening FD %d: %s", output_fd, g_strerror(errno));
+    if (out_dup >= 0)
+        close(out_dup);
+    return FALSE;
+// LCOV_EXCL_STOP
 }
 
 static gboolean
@@ -374,7 +484,6 @@ systemd_escape(char* string)
 gboolean
 netplan_delete_connection(const char* id, const char* rootdir)
 {
-    g_autofree gchar* filename = NULL;
     g_autofree gchar* del = NULL;
     g_autoptr(GError) error = NULL;
     NetplanNetDefinition* nd = NULL;
@@ -409,15 +518,13 @@ netplan_delete_connection(const char* id, const char* rootdir)
         goto cleanup;
     }
 
-    filename = g_path_get_basename(nd->filename);
-    filename[strlen(filename) - 5] = '\0'; //stip ".yaml" suffix
     del = g_strdup_printf("network.%s.%s=NULL", netplan_def_type_name(nd->type), id);
 
     /* TODO: refactor logic to actually be inside the library instead of spawning another process */
-    const gchar *argv[] = { SBINDIR "/" "netplan", "set", del, "--origin-hint" , filename, NULL, NULL, NULL };
+    const gchar *argv[] = { SBINDIR "/" "netplan", "set", del, NULL, NULL, NULL };
     if (rootdir) {
-        argv[5] = "--root-dir";
-        argv[6] = rootdir;
+        argv[3] = "--root-dir";
+        argv[4] = rootdir;
     }
     if (getenv("TEST_NETPLAN_CMD") != 0)
        argv[0] = getenv("TEST_NETPLAN_CMD");
@@ -589,7 +696,7 @@ has_openvswitch(const NetplanOVSSettings* ovs, NetplanBackend backend, GHashTabl
 }
 
 void
-mark_data_as_dirty(NetplanParser* npp, void* data_ptr)
+mark_data_as_dirty(NetplanParser* npp, const void* data_ptr)
 {
     // We don't support dirty tracking for globals yet.
     if (!npp->current.netdef)
@@ -598,5 +705,101 @@ mark_data_as_dirty(NetplanParser* npp, void* data_ptr)
         npp->current.netdef->_private = g_new0(struct private_netdef_data, 1);
     if (!npp->current.netdef->_private->dirty_fields)
         npp->current.netdef->_private->dirty_fields = g_hash_table_new(g_direct_hash, g_direct_equal);
-    g_hash_table_insert(npp->current.netdef->_private->dirty_fields, data_ptr, data_ptr);
+    g_hash_table_insert(npp->current.netdef->_private->dirty_fields, (void*)data_ptr, (void*)data_ptr);
+}
+
+gboolean
+complex_object_is_dirty(const NetplanNetDefinition* def, const void* obj, size_t obj_size) {
+    const char* ptr = obj;
+    if (def->_private == NULL || def->_private->dirty_fields == NULL)
+        return FALSE;
+    for (size_t i = 0; i < obj_size; ++i) {
+        if (g_hash_table_contains(def->_private->dirty_fields, ptr+i))
+            return TRUE;
+    }
+    return FALSE;
+}
+
+/**
+ * Copy a NUL-terminated string into a sized buffer, and returns the size of
+ * the copied string, including the final NUL character. If the buffer is too
+ * small, returns NETPLAN_BUFFER_TOO_SMALL instead.
+ *
+ * In all cases the contents of the output buffer will be entirely overwritten,
+ * except if the input string is NULL. Notably, if the buffer is too small its
+ * content will NOT be NUL-terminated.
+ *
+ * @input: the input string
+ * @out_buffer: a pointer to a buffer into which we want to copy the string
+ * @out_size: the size of the output buffer
+ */
+ssize_t
+netplan_copy_string(const char* input, char* out_buffer, size_t out_size)
+{
+    if (input == NULL)
+        return 0; // LCOV_EXCL_LINE
+    char* end = stpncpy(out_buffer, input, out_size);
+    // If it point to the first byte past the buffer, we don't have enough
+    // space in the buffer.
+    if (end - out_buffer == out_size)
+        return NETPLAN_BUFFER_TOO_SMALL;
+    return end - out_buffer + 1;
+}
+
+NETPLAN_INTERNAL gboolean
+netplan_netdef_match_interface(const NetplanNetDefinition* netdef, const char* name, const char* mac, const char* driver_name)
+{
+    if (!netdef->has_match)
+        return !g_strcmp0(name, netdef->id);
+
+    if (netdef->match.mac) {
+        if (g_ascii_strcasecmp(netdef->match.mac, mac))
+            return FALSE;
+    }
+
+    if (netdef->match.original_name) {
+        if (!name || fnmatch(netdef->match.original_name, name, 0))
+            return FALSE;
+    }
+
+    if (netdef->match.driver) {
+        gboolean matches_driver = FALSE;
+        char** tokens;
+        if (!driver_name)
+            return FALSE;
+        tokens = g_strsplit(netdef->match.driver, "\t", -1);
+        for (char** it = tokens; *it; it++) {
+            if (fnmatch(*it, driver_name, 0) == 0) {
+                matches_driver = TRUE;
+                break;
+            }
+        }
+        g_strfreev(tokens);
+        return matches_driver;
+    }
+
+    return TRUE;
+}
+
+NETPLAN_INTERNAL ssize_t
+netplan_netdef_get_set_name(const NetplanNetDefinition* netdef, char* out_buf, size_t out_size)
+{
+    return netplan_copy_string(netdef->set_name, out_buf, out_size);
+}
+
+gboolean
+is_multicast_address(const char* address)
+{
+    struct in_addr a4;
+    struct in6_addr a6;
+
+    if (inet_pton(AF_INET, address, &a4) > 0) {
+        if (ntohl(a4.s_addr) >> 28 == 0b1110) /* 224.0.0.0/4 */
+            return TRUE;
+    } else if (inet_pton(AF_INET6, address, &a6) > 0) {
+        if (a6.s6_addr[0] == 0xff) /* FF00::/8 */
+            return TRUE;
+    }
+
+    return FALSE;
 }

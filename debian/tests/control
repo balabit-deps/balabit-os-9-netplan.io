@@ -1,4 +1,4 @@
-Test-Command: python3 tests/integration/run.py --test=ovs
+Test-Command: systemctl is-active openvswitch-switch.service && python3 tests/integration/run.py --test=ovs || exit 77
 Tests-Directory: tests/integration
 Depends: @,
   systemd,
@@ -10,7 +10,7 @@ Depends: @,
   python3-gi,
   gir1.2-nm-1.0,
   openvswitch-switch,
-Restrictions: allow-stderr, needs-root, isolation-container, skip-not-installable
+Restrictions: allow-stderr, needs-root, isolation-container, skip-not-installable, skippable
 Features: test-name=ovs
 
 Test-Command: python3 tests/integration/run.py --test=ethernets
@@ -95,6 +95,7 @@ Depends: @,
   libnm0,
   python3-gi,
   gir1.2-nm-1.0,
+  iw,
 Restrictions: allow-stderr, needs-root, isolation-container, flaky
 Features: test-name=wifi
 
@@ -141,8 +142,8 @@ Depends: @,
 Restrictions: allow-stderr, needs-root, isolation-container
 Features: test-name=regressions
 
-Tests: autostart
+Tests: autostart.sh
 Restrictions: allow-stderr, needs-root, isolation-container
 
-Tests: cloud-init
+Tests: cloud-init.sh
 Restrictions: allow-stderr, needs-root, isolation-container

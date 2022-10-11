@@ -29,7 +29,7 @@ assert_is_running() {
 mkdir -p /etc/systemd/network
 cat <<EOF > /etc/systemd/network/20-mgmt.network
 [Match]
-Name=en*
+Name=eth0 en*
 
 [Network]
 DHCP=yes

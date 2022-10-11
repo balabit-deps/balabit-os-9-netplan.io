@@ -60,10 +60,13 @@ wifi_get_freq5(int channel);
 NETPLAN_ABI gchar*
 systemd_escape(char* string);
 
+NETPLAN_INTERNAL gboolean
+netplan_util_create_yaml_patch(const char* conf_obj_path, const char* obj_payload, int out_fd, GError** error);
+
 #define OPENVSWITCH_OVS_VSCTL "/usr/bin/ovs-vsctl"
 
 void
-mark_data_as_dirty(NetplanParser* npp, void* data_ptr);
+mark_data_as_dirty(NetplanParser* npp, const void* data_ptr);
 
 const char*
 tunnel_mode_to_string(NetplanTunnelMode mode);
@@ -88,3 +91,12 @@ process_yaml_hierarchy(const char* rootdir);
 
 gboolean
 has_openvswitch(const NetplanOVSSettings* ovs, NetplanBackend backend, GHashTable *ovs_ports);
+
+ssize_t
+netplan_copy_string(const char* input, char* out_buffer, size_t out_size);
+
+gboolean
+complex_object_is_dirty(const NetplanNetDefinition* def, const void* obj, size_t obj_size);
+
+gboolean
+is_multicast_address(const char*);

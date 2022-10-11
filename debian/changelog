@@ -1,3 +1,35 @@
+netplan.io (0.105-0ubuntu2~22.04.1) jammy; urgency=medium
+
+  * Backport netplan.io 0.105-0ubuntu2 to 22.04 (LP: #1988447)
+    - Add support for VXLAN tunnels (#288)
+    - Add support for VRF devices (#285)
+    - Add support for InfiniBand (IPoIB) (#283)
+    - Allow key configuration for GRE tunnels (#274)
+    - Allow setting the regulatory domain (#281)
+    - Documentation improvements & restructuring (#287)
+    - Add meson build system (#268)
+    - Add abigail ABI compatibility checker (#269)
+    - Update of Fedora RPM spec (#264)
+    - CI improvements (#265, #282)
+    - Netplan `set` uses the consolidated libnetplan YAML parser (#254)
+    - Refactor ConfigManager to use the libnetplan YAML parser (#255)
+    - New `netplan_netdef_get_filepath` API (#275)
+    - Improve NetworkManager device management logic (#276)
+  * Update symbols file for 0.105
+  * d/patches/: Drop patches, applied upstream
+  * d/p/autopkgtest-fixes.patch: Refresh
+  * d/control: bump Standards-Version, no changes needed
+  * d/control, d/tests/control: suggest/add iw for setting a regulatory domain
+  * d/control: merge with Debian, dropping deprecated versioned depends
+  * d/control: Update Vcs-* tags for Ubuntu
+  * d/watch: sync with Debian
+  * d/u/metadata: sync with Debian
+  * d/tests: partially merge with Debian
+  * d/t/control: SKIP Open vSwitch test if OVS is inactive in the test env
+    to fix armhf (LXD/container) autopkgtests
+
+ -- Lukas Märdian <slyon@ubuntu.com>  Tue, 11 Oct 2022 14:58:36 +0200
+
 netplan.io (0.104-0ubuntu2.1) jammy; urgency=medium
 
   * Cherry-pick fix for rendering WPA3 password (8934a1b), LP: #1975576

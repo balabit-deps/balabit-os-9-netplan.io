@@ -147,6 +147,16 @@ reset_dhcp_overrides(NetplanDHCPOverrides* overrides)
     overrides->metric = NETPLAN_METRIC_UNSPEC;
 }
 
+void
+reset_ip_rule(NetplanIPRule* ip_rule)
+{
+    ip_rule->family = G_MAXUINT; /* 0 is a valid family ID */
+    ip_rule->priority = NETPLAN_IP_RULE_PRIO_UNSPEC;
+    ip_rule->table = NETPLAN_ROUTE_TABLE_UNSPEC;
+    ip_rule->tos = NETPLAN_IP_RULE_TOS_UNSPEC;
+    ip_rule->fwmark = NETPLAN_IP_RULE_FW_MARK_UNSPEC;
+}
+
 /* Reset a backend settings object. The caller needs to specify the actual backend as it is not
  * contained within the object itself! */
 static void
@@ -175,6 +185,17 @@ reset_private_netdef_data(struct private_netdef_data* data) {
     if (data->dirty_fields)
         g_hash_table_destroy(data->dirty_fields);
     data->dirty_fields = NULL;
+}
+
+void
+reset_vxlan(NetplanVxlan* vxlan)
+{
+    if (!vxlan)
+        return;
+    memset(vxlan, 0, sizeof(NetplanVxlan));
+    vxlan->link = NULL;
+    vxlan->flow_label = G_MAXUINT;
+    vxlan->do_not_fragment = NETPLAN_TRISTATE_UNSET;
 }
 
 /* Free a heap-allocated NetplanWifiAccessPoint object.
@@ -229,6 +250,7 @@ reset_netdef(NetplanNetDefinition* netdef, NetplanDefType new_type, NetplanBacke
 
     FREE_AND_NULLIFY(netdef->gateway4);
     FREE_AND_NULLIFY(netdef->gateway6);
+    FREE_AND_NULLIFY(netdef->regulatory_domain);
     free_garray_with_destructor(&netdef->ip4_nameservers, g_free);
     free_garray_with_destructor(&netdef->ip6_nameservers, g_free);
     free_garray_with_destructor(&netdef->search_domains, g_free);
@@ -247,6 +269,9 @@ reset_netdef(NetplanNetDefinition* netdef, NetplanDefType new_type, NetplanBacke
     netdef->vlan_id = G_MAXUINT; /* 0 is a valid ID */
     netdef->vlan_link = NULL;
     netdef->has_vlans = FALSE;
+
+    netdef->vrf_link = NULL;
+    netdef->vrf_table = G_MAXUINT;
 
     FREE_AND_NULLIFY(netdef->set_mac);
     netdef->mtubytes = 0;
@@ -284,6 +309,10 @@ reset_netdef(NetplanNetDefinition* netdef, NetplanDefType new_type, NetplanBacke
     FREE_AND_NULLIFY(netdef->bond_params.primary_slave);
     memset(&netdef->bond_params, 0, sizeof(netdef->bond_params));
 
+    netdef->has_vxlans = FALSE;
+    reset_vxlan(netdef->vxlan);
+    FREE_AND_NULLIFY(netdef->vxlan);
+
     FREE_AND_NULLIFY(netdef->modem_params.apn);
     FREE_AND_NULLIFY(netdef->modem_params.device_id);
     FREE_AND_NULLIFY(netdef->modem_params.network_id);
@@ -295,6 +324,7 @@ reset_netdef(NetplanNetDefinition* netdef, NetplanDefType new_type, NetplanBacke
     FREE_AND_NULLIFY(netdef->modem_params.username);
     memset(&netdef->modem_params, 0, sizeof(netdef->modem_params));
 
+    netdef->bridge_neigh_suppress = NETPLAN_TRISTATE_UNSET;
     FREE_AND_NULLIFY(netdef->bridge_params.ageing_time);
     FREE_AND_NULLIFY(netdef->bridge_params.forward_delay);
     FREE_AND_NULLIFY(netdef->bridge_params.hello_time);
@@ -320,7 +350,7 @@ reset_netdef(NetplanNetDefinition* netdef, NetplanDefType new_type, NetplanBacke
     reset_ovs_settings(&netdef->ovs_settings);
     reset_backend_settings(&netdef->backend_settings, backend);
 
-    FREE_AND_NULLIFY(netdef->filename);
+    FREE_AND_NULLIFY(netdef->filepath);
     netdef->tunnel_ttl = 0;
     FREE_AND_NULLIFY(netdef->activation_mode);
     netdef->ignore_carrier = FALSE;
@@ -335,6 +365,16 @@ reset_netdef(NetplanNetDefinition* netdef, NetplanDefType new_type, NetplanBacke
 
     reset_private_netdef_data(netdef->_private);
     FREE_AND_NULLIFY(netdef->_private);
+
+    netdef->receive_checksum_offload = NETPLAN_TRISTATE_UNSET;
+    netdef->transmit_checksum_offload = NETPLAN_TRISTATE_UNSET;
+    netdef->tcp_segmentation_offload = NETPLAN_TRISTATE_UNSET;
+    netdef->tcp6_segmentation_offload = NETPLAN_TRISTATE_UNSET;
+    netdef->generic_segmentation_offload = NETPLAN_TRISTATE_UNSET;
+    netdef->generic_receive_offload = NETPLAN_TRISTATE_UNSET;
+    netdef->large_receive_offload = NETPLAN_TRISTATE_UNSET;
+
+    netdef->ib_mode = NETPLAN_IB_MODE_KERNEL;
 }
 
 static void
@@ -384,6 +424,12 @@ netplan_state_reset(NetplanState* np_state)
 
     np_state->backend = NETPLAN_BACKEND_NONE;
     reset_ovs_settings(&np_state->ovs_settings);
+
+    if (np_state->sources) {
+        /* Properly configured at creation to clean up after itself. */
+        g_hash_table_destroy(np_state->sources);
+        np_state->sources = NULL;
+    }
 }
 
 NetplanBackend
@@ -433,22 +479,31 @@ netplan_state_get_netdef(const NetplanState* np_state, const char* id)
     return g_hash_table_lookup(np_state->netdefs, id);
 }
 
-NETPLAN_PUBLIC const char *
-netplan_netdef_get_filename(const NetplanNetDefinition* netdef)
+NETPLAN_PUBLIC ssize_t
+netplan_netdef_get_filepath(const NetplanNetDefinition* netdef, char* out_buffer, size_t out_buf_size)
 {
     g_assert(netdef);
-    return netdef->filename;
+    return netplan_copy_string(netdef->filepath, out_buffer, out_buf_size);
 }
 
-NETPLAN_INTERNAL const char*
-netplan_netdef_get_id(const NetplanNetDefinition* netdef)
+NETPLAN_INTERNAL NetplanBackend
+netplan_netdef_get_backend(const NetplanNetDefinition* netdef)
+{
+    return netdef->backend;
+}
+
+NETPLAN_INTERNAL NetplanDefType
+netplan_netdef_get_type(const NetplanNetDefinition* netdef)
+{
+    return netdef->type;
+}
+
+NETPLAN_INTERNAL ssize_t
+netplan_netdef_get_id(const NetplanNetDefinition* netdef, char* out_buffer, size_t out_buf_size)
 {
     g_assert(netdef);
-    return netdef->id;
+    return netplan_copy_string(netdef->id, out_buffer, out_buf_size);
 }
-
-NETPLAN_INTERNAL const char*
-_netplan_netdef_id(NetplanNetDefinition* netdef) __attribute__((alias("netplan_netdef_get_id")));
 
 gboolean
 netplan_state_has_nondefault_globals(const NetplanState* np_state)
@@ -469,4 +524,50 @@ netplan_netdef_get_delay_virtual_functions_rebind(const NetplanNetDefinition* ne
 {
     g_assert(netdef);
     return netdef->sriov_delay_virtual_functions_rebind;
+}
+
+NETPLAN_INTERNAL gboolean
+netplan_netdef_has_match(const NetplanNetDefinition* netdef)
+{
+    return netdef->has_match;
+}
+
+NETPLAN_INTERNAL NetplanNetDefinition*
+_netplan_netdef_get_sriov_link(const NetplanNetDefinition* netdef)
+{
+    return netdef->sriov_link;
+}
+
+NETPLAN_INTERNAL gboolean
+_netplan_netdef_get_sriov_vlan_filter(const NetplanNetDefinition* netdef) {
+    return netdef->sriov_vlan_filter;
+}
+
+NETPLAN_INTERNAL NetplanNetDefinition*
+_netplan_netdef_get_vlan_link(const NetplanNetDefinition* netdef)
+{
+    return netdef->vlan_link;
+}
+
+NETPLAN_INTERNAL guint
+_netplan_netdef_get_vlan_id(const NetplanNetDefinition* netdef)
+{
+    return netdef->vlan_id;
+}
+
+NETPLAN_INTERNAL gboolean
+_netplan_netdef_get_critical(const NetplanNetDefinition* netdef)
+{
+    return netdef->critical;
+}
+
+NETPLAN_INTERNAL gboolean
+_netplan_netdef_is_trivial_compound_itf(const NetplanNetDefinition* netdef)
+{
+    g_assert(netdef);
+    if (netdef->type == NETPLAN_DEF_TYPE_BOND)
+        return !complex_object_is_dirty(netdef, &netdef->bond_params, sizeof(netdef->bond_params));
+    else if (netdef->type == NETPLAN_DEF_TYPE_BRIDGE)
+        return !complex_object_is_dirty(netdef, &netdef->bridge_params, sizeof(netdef->bridge_params));
+    return FALSE;
 }
