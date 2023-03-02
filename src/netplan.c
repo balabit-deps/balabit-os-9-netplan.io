@@ -89,14 +89,12 @@ gchar *tmp = NULL;
     } \
 }\
 
-static gboolean
-complex_object_is_dirty(const NetplanNetDefinition* def, char* obj, size_t obj_size) {
-    /* We literally check every address in the object! Ugly, but it works. */
-    for (size_t i = 0; i < obj_size; ++i) {
-        if (DIRTY_REF(def, obj+i))
-            return TRUE;
-    }
-    return FALSE;
+#define YAML_BOOL_TRISTATE(_def, event_ptr, emitter_ptr, key, value) {\
+    if (value == NETPLAN_TRISTATE_TRUE) { \
+        YAML_NONNULL_STRING_PLAIN(event_ptr, emitter_ptr, key, "true"); \
+    } else if (value == NETPLAN_TRISTATE_FALSE) { \
+        YAML_NONNULL_STRING_PLAIN(event_ptr, emitter_ptr, key, "false"); \
+    } \
 }
 
 #define DIRTY_COMPLEX(_def, _data) complex_object_is_dirty(_def, (char*)(&_data), sizeof(_data))
@@ -198,6 +196,68 @@ write_bond_params(yaml_event_t* event, yaml_emitter_t* emitter, const NetplanNet
             YAML_SEQUENCE_CLOSE(event, emitter);
         }
         YAML_MAPPING_CLOSE(event, emitter);
+    }
+    return TRUE;
+err_path: return FALSE; // LCOV_EXCL_LINE
+}
+
+static gboolean
+write_vxlan(yaml_event_t* event, yaml_emitter_t* emitter, const NetplanNetDefinition* def)
+{
+    if (def->type == NETPLAN_DEF_TYPE_TUNNEL && def->tunnel.mode == NETPLAN_TUNNEL_MODE_VXLAN) {
+        g_assert(def->vxlan);
+        YAML_UINT_0(def, event, emitter, "id", def->vxlan->vni);
+        if (def->vxlan->link)
+            YAML_STRING(def, event, emitter, "link", def->vxlan->link->id);
+        if (def->vxlan->source_port_min && def->vxlan->source_port_max) {
+            YAML_SCALAR_PLAIN(event, emitter, "port-range");
+            YAML_SEQUENCE_OPEN(event, emitter);
+            tmp = g_strdup_printf("%u", def->vxlan->source_port_min);
+            YAML_SCALAR_PLAIN(event, emitter, tmp);
+            g_free(tmp);
+            tmp = g_strdup_printf("%u", def->vxlan->source_port_max);
+            YAML_SCALAR_PLAIN(event, emitter, tmp);
+            g_free(tmp);
+            YAML_SEQUENCE_CLOSE(event, emitter);
+        }
+        YAML_UINT_DEFAULT(def, event, emitter, "flow-label", def->vxlan->flow_label, G_MAXUINT);
+        YAML_UINT_0(def, event, emitter, "limit", def->vxlan->limit);
+        YAML_UINT_0(def, event, emitter, "type-of-service", def->vxlan->tos);
+        YAML_UINT_0(def, event, emitter, "ageing", def->vxlan->ageing);
+        YAML_BOOL_TRUE(def, event, emitter, "mac-learning", def->vxlan->mac_learning);
+        YAML_BOOL_TRUE(def, event, emitter, "arp-proxy", def->vxlan->arp_proxy);
+        YAML_BOOL_TRUE(def, event, emitter, "short-circuit", def->vxlan->short_circuit);
+        YAML_BOOL_TRISTATE(def, event, emitter, "do-not-fragment", def->vxlan->do_not_fragment);
+        if (def->vxlan->notifications) {
+            YAML_SCALAR_PLAIN(event, emitter, "notifications");
+            YAML_SEQUENCE_OPEN(event, emitter);
+            int f = def->vxlan->notifications;
+            const char* (*fn)(int) = &netplan_vxlan_notification_name;
+            YAML_FLAG(event, emitter, NETPLAN_VXLAN_NOTIFICATION_L2_MISS, f, (*fn));
+            YAML_FLAG(event, emitter, NETPLAN_VXLAN_NOTIFICATION_L3_MISS, f, (*fn));
+            YAML_SEQUENCE_CLOSE(event, emitter);
+        }
+        if (def->vxlan->checksums) {
+            YAML_SCALAR_PLAIN(event, emitter, "checksums");
+            YAML_SEQUENCE_OPEN(event, emitter);
+            int f = def->vxlan->checksums;
+            const char* (*fn)(int) = &netplan_vxlan_checksum_name;
+            YAML_FLAG(event, emitter, NETPLAN_VXLAN_CHECKSUM_UDP, f, (*fn));
+            YAML_FLAG(event, emitter, NETPLAN_VXLAN_CHECKSUM_ZERO_UDP6_TX, f, (*fn));
+            YAML_FLAG(event, emitter, NETPLAN_VXLAN_CHECKSUM_ZERO_UDP6_RX, f, (*fn));
+            YAML_FLAG(event, emitter, NETPLAN_VXLAN_CHECKSUM_REMOTE_TX, f, (*fn));
+            YAML_FLAG(event, emitter, NETPLAN_VXLAN_CHECKSUM_REMOTE_RX, f, (*fn));
+            YAML_SEQUENCE_CLOSE(event, emitter);
+        }
+        if (def->vxlan->extensions) {
+            YAML_SCALAR_PLAIN(event, emitter, "extensions");
+            YAML_SEQUENCE_OPEN(event, emitter);
+            int f = def->vxlan->extensions;
+            const char* (*fn)(int) = &netplan_vxlan_extension_name;
+            YAML_FLAG(event, emitter, NETPLAN_VXLAN_EXTENSION_GROUP_POLICY, f, (*fn));
+            YAML_FLAG(event, emitter, NETPLAN_VXLAN_EXTENSION_GENERIC_PROTOCOL, f, (*fn));
+            YAML_SEQUENCE_CLOSE(event, emitter);
+        }
     }
     return TRUE;
 err_path: return FALSE; // LCOV_EXCL_LINE
@@ -443,6 +503,9 @@ write_tunnel_settings(yaml_event_t* event, yaml_emitter_t* emitter, const Netpla
     YAML_UINT_0(def, event, emitter, "port", def->tunnel.port);
     YAML_UINT_0(def, event, emitter, "ttl", def->tunnel_ttl);
 
+    /* VXLAN settings */
+    write_vxlan(event, emitter, def);
+
     if (def->tunnel.input_key || def->tunnel.output_key || def->tunnel.private_key) {
         if (   g_strcmp0(def->tunnel.input_key, def->tunnel.output_key) == 0
             && g_strcmp0(def->tunnel.input_key, def->tunnel.private_key) == 0) {
@@ -505,7 +568,9 @@ write_routes(yaml_event_t* event, yaml_emitter_t* emitter, const NetplanNetDefin
             if (r->scope && g_strcmp0(r->scope, "global") != 0)
                 YAML_NONNULL_STRING(event, emitter, "scope", r->scope);
             YAML_UINT_DEFAULT(def, event, emitter, "metric", r->metric, NETPLAN_METRIC_UNSPEC);
-            YAML_UINT_DEFAULT(def, event, emitter, "table", r->table, NETPLAN_ROUTE_TABLE_UNSPEC);
+            /* VRF devices use the VRF routing table implicitly */
+            if (def->type != NETPLAN_DEF_TYPE_VRF)
+                YAML_UINT_DEFAULT(def, event, emitter, "table", r->table, NETPLAN_ROUTE_TABLE_UNSPEC);
             YAML_UINT_0(def, event, emitter, "mtu", r->mtubytes);
             YAML_UINT_0(def, event, emitter, "congestion-window", r->congestion_window);
             YAML_UINT_0(def, event, emitter, "advertised-receive-window", r->advertised_receive_window);
@@ -524,7 +589,9 @@ write_routes(yaml_event_t* event, yaml_emitter_t* emitter, const NetplanNetDefin
         for (unsigned i = 0; i < def->ip_rules->len; ++i) {
             NetplanIPRule *r = g_array_index(def->ip_rules, NetplanIPRule*, i);
             YAML_MAPPING_OPEN(event, emitter);
-            YAML_UINT_DEFAULT(def, event, emitter, "table", r->table, NETPLAN_ROUTE_TABLE_UNSPEC);
+            /* VRF devices use the VRF routing table implicitly */
+            if (def->type != NETPLAN_DEF_TYPE_VRF)
+                YAML_UINT_DEFAULT(def, event, emitter, "table", r->table, NETPLAN_ROUTE_TABLE_UNSPEC);
             YAML_UINT_DEFAULT(def, event, emitter, "priority", r->priority, NETPLAN_IP_RULE_PRIO_UNSPEC);
             YAML_UINT_DEFAULT(def, event, emitter, "type-of-service", r->tos, NETPLAN_IP_RULE_TOS_UNSPEC);
             YAML_UINT_DEFAULT(def, event, emitter, "mark", r->fwmark, NETPLAN_IP_RULE_FW_MARK_UNSPEC);
@@ -712,12 +779,12 @@ _serialize_yaml(
                    def->sriov_delay_virtual_functions_rebind);
 
     /* Search interfaces */
-    if (def->type == NETPLAN_DEF_TYPE_BRIDGE || def->type == NETPLAN_DEF_TYPE_BOND) {
+    if (def->type == NETPLAN_DEF_TYPE_BRIDGE || def->type == NETPLAN_DEF_TYPE_BOND || def->type == NETPLAN_DEF_TYPE_VRF) {
         tmp_arr = g_array_new(FALSE, FALSE, sizeof(NetplanNetDefinition*));
         g_hash_table_iter_init(&iter, np_state->netdefs);
         while (g_hash_table_iter_next (&iter, &key, &value)) {
             NetplanNetDefinition *nd = (NetplanNetDefinition *) value;
-            if (g_strcmp0(nd->bond, def->id) == 0 || g_strcmp0(nd->bridge, def->id) == 0)
+            if (g_strcmp0(nd->bond, def->id) == 0 || g_strcmp0(nd->bridge, def->id) == 0 || nd->vrf_link == def)
                 g_array_append_val(tmp_arr, nd);
         }
         if (tmp_arr->len > 0) {
@@ -735,6 +802,7 @@ _serialize_yaml(
     }
 
     write_routes(event, emitter, def);
+    YAML_BOOL_TRISTATE(def, event, emitter, "neigh-suppress", def->bridge_neigh_suppress);
 
     /* VLAN settings */
     if (def->type == NETPLAN_DEF_TYPE_VLAN) {
@@ -742,6 +810,10 @@ _serialize_yaml(
         if (def->vlan_link)
             YAML_STRING(def, event, emitter, "link", def->vlan_link->id);
     }
+
+    /* VRF settings */
+    if (def->type == NETPLAN_DEF_TYPE_VRF)
+        YAML_UINT_DEFAULT(def, event, emitter, "table", def->vrf_table, G_MAXUINT);
 
     /* Tunnel settings */
     if (def->type == NETPLAN_DEF_TYPE_TUNNEL) {
@@ -752,13 +824,20 @@ _serialize_yaml(
     YAML_BOOL_TRUE(def, event, emitter, "wakeonlan", def->wake_on_lan);
 
     /* Offload options */
-    YAML_BOOL_TRUE(def, event, emitter, "receive-checksum-offload", def->receive_checksum_offload);
-    YAML_BOOL_TRUE(def, event, emitter, "transmit-checksum-offload", def->transmit_checksum_offload);
-    YAML_BOOL_TRUE(def, event, emitter, "tcp-segmentation-offload", def->tcp_segmentation_offload);
-    YAML_BOOL_TRUE(def, event, emitter, "tcp6-segmentation-offload", def->tcp6_segmentation_offload);
-    YAML_BOOL_TRUE(def, event, emitter, "generic-segmentation-offload", def->generic_segmentation_offload);
-    YAML_BOOL_TRUE(def, event, emitter, "generic-receive-offload", def->generic_receive_offload);
-    YAML_BOOL_TRUE(def, event, emitter, "large-receive-offload", def->large_receive_offload);
+    if (def->receive_checksum_offload != NETPLAN_TRISTATE_UNSET)
+        YAML_BOOL_TRUE(def, event, emitter, "receive-checksum-offload", def->receive_checksum_offload);
+    if (def->transmit_checksum_offload != NETPLAN_TRISTATE_UNSET)
+        YAML_BOOL_TRUE(def, event, emitter, "transmit-checksum-offload", def->transmit_checksum_offload);
+    if (def->tcp_segmentation_offload != NETPLAN_TRISTATE_UNSET)
+        YAML_BOOL_TRUE(def, event, emitter, "tcp-segmentation-offload", def->tcp_segmentation_offload);
+    if (def->tcp6_segmentation_offload != NETPLAN_TRISTATE_UNSET)
+        YAML_BOOL_TRUE(def, event, emitter, "tcp6-segmentation-offload", def->tcp6_segmentation_offload);
+    if (def->generic_segmentation_offload != NETPLAN_TRISTATE_UNSET)
+        YAML_BOOL_TRUE(def, event, emitter, "generic-segmentation-offload", def->generic_segmentation_offload);
+    if (def->generic_receive_offload != NETPLAN_TRISTATE_UNSET)
+        YAML_BOOL_TRUE(def, event, emitter, "generic-receive-offload", def->generic_receive_offload);
+    if (def->large_receive_offload != NETPLAN_TRISTATE_UNSET)
+        YAML_BOOL_TRUE(def, event, emitter, "large-receive-offload", def->large_receive_offload);
 
     if (def->wowlan && def->wowlan != NETPLAN_WIFI_WOWLAN_DEFAULT) {
         YAML_SCALAR_PLAIN(event, emitter, "wakeonwlan");
@@ -782,6 +861,8 @@ _serialize_yaml(
             YAML_SCALAR_PLAIN(event, emitter, "tcp");
         YAML_SEQUENCE_CLOSE(event, emitter);
     }
+
+    YAML_STRING(def, event, emitter, "regulatory-domain", def->regulatory_domain);
 
     if (def->optional_addresses) {
         YAML_SCALAR_PLAIN(event, emitter, "optional-addresses");
@@ -811,6 +892,12 @@ _serialize_yaml(
     }
 
     write_openvswitch(event, emitter, &def->ovs_settings, def->backend, NULL);
+
+    /* InfiniBand */
+    if (def->ib_mode != NETPLAN_IB_MODE_KERNEL) {
+        const char* ib_mode_str = netplan_infiniband_mode_name(def->ib_mode);
+        YAML_STRING(def, event, emitter, "infiniband-mode", ib_mode_str);
+    }
 
     if (def->type == NETPLAN_DEF_TYPE_MODEM)
         write_modem_params(event, emitter, def);
@@ -990,6 +1077,64 @@ file_error:
 }
 
 /**
+ * Generate the YAML configuration, filtered to the data relevant to a particular file.
+ * Any data that's assigned to another file is ignored. Data that is not assigned is considered
+ * relevant.
+ *
+ * @np_state: the state for which to generate the config
+ * @filename: Relevant file basename
+ * @rootdir: If not %NULL, generate configuration in this root directory
+ *           (useful for testing).
+ */
+gboolean
+netplan_state_write_yaml_file(const NetplanState* np_state, const char* filename, const char* rootdir, GError** error)
+{
+    GList* iter = np_state->netdefs_ordered;
+    g_autofree gchar* path = NULL;
+    g_autofree gchar* tmp_path = NULL;
+    GList* to_write = NULL;
+    int out_fd;
+
+    path = g_build_path(G_DIR_SEPARATOR_S, rootdir ?: G_DIR_SEPARATOR_S, "etc", "netplan", filename, NULL);
+
+    while (iter) {
+        NetplanNetDefinition* netdef = iter->data;
+        const char* fname = netdef->filepath ? netdef->filepath : path;
+        if (g_strcmp0(fname, path) == 0)
+            to_write = g_list_append(to_write, netdef);
+        iter = iter->next;
+    }
+
+    /* Remove any existing file if there is no data to write */
+    if (to_write == NULL) {
+        if (unlink(path) && errno != ENOENT) {
+            g_set_error(error, G_FILE_ERROR, errno, "%s", strerror(errno));
+            return FALSE;
+        }
+        return TRUE;
+    }
+
+    tmp_path = g_strdup_printf("%s.XXXXXX", path);
+    out_fd = mkstemp(tmp_path);
+    if (out_fd < 0) {
+        g_set_error(error, G_FILE_ERROR, errno, "%s", strerror(errno));
+        return FALSE;
+    }
+
+    gboolean ret = netplan_netdef_list_write_yaml(np_state, to_write, out_fd, error);
+    g_list_free(to_write);
+    close(out_fd);
+    if (ret) {
+        if (rename(tmp_path, path) == 0)
+            return TRUE;
+        g_set_error(error, G_FILE_ERROR, errno, "%s", strerror(errno));
+    }
+    /* Something went wrong, clean up the tempfile! */
+    unlink(tmp_path);
+    return FALSE;
+}
+
+/**
  * Dump the whole state into a single YAML file.
  *
  * @np_state: the state for which to generate the config
@@ -1002,4 +1147,84 @@ netplan_state_dump_yaml(const NetplanState* np_state, int out_fd, GError** error
         return TRUE;
 
     return netplan_netdef_list_write_yaml(np_state, np_state->netdefs_ordered, out_fd, error);
+}
+
+/**
+ * Regenerate the YAML configuration files from a given state. Any state that
+ * hasn't an associated filepath will use the default_filename output in the
+ * standard config directory.
+ *
+ * @np_state: the state for which to generate the config
+ * @default_filename: Default config file, cannot be NULL or empty
+ * @rootdir: If not %NULL, generate configuration in this root directory
+ *           (useful for testing).
+ */
+gboolean
+netplan_state_update_yaml_hierarchy(const NetplanState* np_state, const char* default_filename, const char* rootdir, GError** error)
+{
+    g_autofree gchar *default_path = NULL;
+    gboolean ret = FALSE;
+    GHashTableIter hash_iter;
+    gpointer key, value;
+    GHashTable *perfile_netdefs;
+
+    g_assert(default_filename != NULL && *default_filename != '\0');
+
+    perfile_netdefs = g_hash_table_new_full(g_str_hash, g_str_equal, NULL, (GDestroyNotify)g_list_free);
+    default_path = g_build_path(G_DIR_SEPARATOR_S, rootdir ?: G_DIR_SEPARATOR_S, "etc", "netplan", default_filename, NULL);
+    int out_fd = -1;
+
+    /* Dump global conf to the default path */
+    if (!np_state->netdefs || g_hash_table_size(np_state->netdefs) == 0) {
+        if ((np_state->backend != NETPLAN_BACKEND_NONE)
+                || has_openvswitch(&np_state->ovs_settings, NETPLAN_BACKEND_NONE, NULL)) {
+            g_hash_table_insert(perfile_netdefs, default_path, NULL);
+        }
+    } else {
+        GList* iter = np_state->netdefs_ordered;
+        while (iter) {
+            NetplanNetDefinition* netdef = iter->data;
+            const char* filename = netdef->filepath ? netdef->filepath : default_path;
+            GList* list = NULL;
+            g_hash_table_steal_extended(perfile_netdefs, filename, NULL, (gpointer*)&list);
+            g_hash_table_insert(perfile_netdefs, (gpointer)filename, g_list_append(list, netdef));
+            iter = iter->next;
+        }
+    }
+
+    g_hash_table_iter_init(&hash_iter, perfile_netdefs);
+    while (g_hash_table_iter_next (&hash_iter, &key, &value)) {
+        const char *filename = key;
+        GList* netdefs = value;
+        out_fd = open(filename, O_WRONLY | O_CREAT | O_TRUNC, 0640);
+        if (out_fd < 0)
+            goto file_error;
+        if (!netplan_netdef_list_write_yaml(np_state, netdefs, out_fd, error))
+            goto cleanup; // LCOV_EXCL_LINE
+        close(out_fd);
+    }
+
+    /* Remove any referenced source file that doesn't have any associated data.
+       Presumably, it is data that has been obsoleted by files loaded
+       afterwards, typically via `netplan set`. */
+    if (np_state->sources) {
+        g_hash_table_iter_init(&hash_iter, np_state->sources);
+        while (g_hash_table_iter_next (&hash_iter, &key, &value)) {
+            if (!g_hash_table_contains(perfile_netdefs, key)) {
+                if (unlink(key) && errno != ENOENT)
+                    goto file_error; // LCOV_EXCL_LINE
+            }
+        }
+    }
+    ret = TRUE;
+    goto cleanup;
+
+file_error:
+    g_set_error(error, G_FILE_ERROR, errno, "%s", strerror(errno));
+    ret = FALSE;
+cleanup:
+    if (out_fd >= 0)
+        close(out_fd);
+    g_hash_table_destroy(perfile_netdefs);
+    return ret;
 }

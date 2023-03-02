@@ -17,10 +17,15 @@
 
 #pragma once
 #include <glib.h>
+#include <stdlib.h>
 
 #define NETPLAN_PUBLIC __attribute__ ((visibility("default")))
 #define NETPLAN_INTERNAL __attribute__ ((visibility("default")))
 #define NETPLAN_ABI __attribute__ ((visibility("default")))
+
+#define NETPLAN_DEPRECATED __attribute__ ((deprecated))
+
+#define NETPLAN_BUFFER_TOO_SMALL -2
 
 /**
  * Represent a configuration stanza
@@ -54,6 +59,26 @@ netplan_state_get_netdefs_size(const NetplanState* np_state);
 NETPLAN_PUBLIC NetplanNetDefinition*
 netplan_state_get_netdef(const NetplanState* np_state, const char* id);
 
+/* Write the selected yaml file. All definitions that originate from this file,
+ * as well as those without any given origin, are written to it.
+ */
+NETPLAN_PUBLIC gboolean
+netplan_state_write_yaml_file(
+        const NetplanState* np_state,
+        const char* filename,
+        const char* rootdir,
+        GError** error);
+
+/* Update all the YAML files that were used to create this state.
+ * The definitions without clear origin are written to @default_filename.
+ */
+NETPLAN_PUBLIC gboolean
+netplan_state_update_yaml_hierarchy(
+        const NetplanState* np_state,
+        const char* default_filename,
+        const char* rootdir,
+        GError** error);
+
 /* Dump the whole yaml configuration into the given file, regardless of the origin
  * of each definition.
  */
@@ -70,7 +95,12 @@ netplan_netdef_write_yaml(
         const char* rootdir,
         GError** error);
 
-NETPLAN_PUBLIC const char *
+NETPLAN_PUBLIC ssize_t
+netplan_netdef_get_filepath(const NetplanNetDefinition* netdef, char* out_buffer, size_t out_buffer_size);
+
+/********** Old API below this ***********/
+
+NETPLAN_DEPRECATED NETPLAN_PUBLIC const char *
 netplan_netdef_get_filename(const NetplanNetDefinition* netdef);
 
 NETPLAN_PUBLIC void

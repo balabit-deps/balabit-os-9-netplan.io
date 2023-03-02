@@ -243,13 +243,13 @@ write_link_file(const NetplanNetDefinition* def, const char* rootdir, const char
     if (!def->set_name &&
         !def->wake_on_lan &&
         !def->mtubytes &&
-        !def->receive_checksum_offload &&
-        !def->transmit_checksum_offload &&
-        !def->tcp_segmentation_offload &&
-        !def->tcp6_segmentation_offload &&
-        !def->generic_segmentation_offload &&
-        !def->generic_receive_offload &&
-        !def->large_receive_offload)
+        (def->receive_checksum_offload == NETPLAN_TRISTATE_UNSET) &&
+        (def->transmit_checksum_offload == NETPLAN_TRISTATE_UNSET) &&
+        (def->tcp_segmentation_offload == NETPLAN_TRISTATE_UNSET) &&
+        (def->tcp6_segmentation_offload == NETPLAN_TRISTATE_UNSET) &&
+        (def->generic_segmentation_offload == NETPLAN_TRISTATE_UNSET) &&
+        (def->generic_receive_offload == NETPLAN_TRISTATE_UNSET) &&
+        (def->large_receive_offload == NETPLAN_TRISTATE_UNSET))
         return;
 
     /* build file contents */
@@ -265,30 +265,63 @@ write_link_file(const NetplanNetDefinition* def, const char* rootdir, const char
         g_string_append_printf(s, "MTUBytes=%u\n", def->mtubytes);
 
     /* Offload options */
-    if (def->receive_checksum_offload)
-        g_string_append_printf(s, "ReceiveChecksumOffload=%u\n", def->receive_checksum_offload);
+    if (def->receive_checksum_offload != NETPLAN_TRISTATE_UNSET)
+        g_string_append_printf(s, "ReceiveChecksumOffload=%s\n",
+        (def->receive_checksum_offload ? "true" : "false"));
 
-    if (def->transmit_checksum_offload)
-        g_string_append_printf(s, "TransmitChecksumOffload=%u\n", def->transmit_checksum_offload);
+    if (def->transmit_checksum_offload != NETPLAN_TRISTATE_UNSET)
+        g_string_append_printf(s, "TransmitChecksumOffload=%s\n",
+        (def->transmit_checksum_offload ? "true" : "false"));
 
-    if (def->tcp_segmentation_offload)
-        g_string_append_printf(s, "TCPSegmentationOffload=%u\n", def->tcp_segmentation_offload);
+    if (def->tcp_segmentation_offload != NETPLAN_TRISTATE_UNSET)
+        g_string_append_printf(s, "TCPSegmentationOffload=%s\n",
+        (def->tcp_segmentation_offload ? "true" : "false"));
 
-    if (def->tcp6_segmentation_offload)
-        g_string_append_printf(s, "TCP6SegmentationOffload=%u\n", def->tcp6_segmentation_offload);
+    if (def->tcp6_segmentation_offload != NETPLAN_TRISTATE_UNSET)
+        g_string_append_printf(s, "TCP6SegmentationOffload=%s\n",
+        (def->tcp6_segmentation_offload ? "true" : "false"));
 
-    if (def->generic_segmentation_offload)
-        g_string_append_printf(s, "GenericSegmentationOffload=%u\n", def->generic_segmentation_offload);
+    if (def->generic_segmentation_offload != NETPLAN_TRISTATE_UNSET)
+        g_string_append_printf(s, "GenericSegmentationOffload=%s\n",
+        (def->generic_segmentation_offload ? "true" : "false"));
 
-    if (def->generic_receive_offload)
-        g_string_append_printf(s, "GenericReceiveOffload=%u\n", def->generic_receive_offload);
+    if (def->generic_receive_offload != NETPLAN_TRISTATE_UNSET)
+        g_string_append_printf(s, "GenericReceiveOffload=%s\n",
+        (def->generic_receive_offload ? "true" : "false"));
 
-    if (def->large_receive_offload)
-        g_string_append_printf(s, "LargeReceiveOffload=%u\n", def->large_receive_offload);
+    if (def->large_receive_offload != NETPLAN_TRISTATE_UNSET)
+        g_string_append_printf(s, "LargeReceiveOffload=%s\n",
+        (def->large_receive_offload ? "true" : "false"));
 
     orig_umask = umask(022);
     g_string_free_to_file(s, rootdir, path, ".link");
     umask(orig_umask);
+}
+
+static gboolean
+write_regdom(const NetplanNetDefinition* def, const char* rootdir, GError** error)
+{
+    g_assert(def->regulatory_domain);
+    g_autofree gchar* id_escaped = NULL;
+    g_autofree char* link = g_strjoin(NULL, rootdir ?: "", "/run/systemd/system/network.target.wants/netplan-regdom.service", NULL);
+    g_autofree char* path = g_strjoin(NULL, "/run/systemd/system/netplan-regdom.service", NULL);
+
+    GString* s = g_string_new("[Unit]\n");
+    g_string_append(s, "Description=Netplan regulatory-domain configuration\n");
+    g_string_append(s, "After=network.target\n");
+    g_string_append(s, "ConditionFileIsExecutable="SBINDIR"/iw\n");
+    g_string_append(s, "\n[Service]\nType=oneshot\n");
+    g_string_append_printf(s, "ExecStart="SBINDIR"/iw reg set %s\n", def->regulatory_domain);
+
+    g_string_free_to_file(s, rootdir, path, NULL);
+    safe_mkdir_p_dir(link);
+    if (symlink(path, link) < 0 && errno != EEXIST) {
+        // LCOV_EXCL_START
+        g_set_error(error, G_FILE_ERROR, G_FILE_ERROR_FAILED, "failed to create enablement symlink: %m\n");
+        return FALSE;
+        // LCOV_EXCL_STOP
+    }
+    return TRUE;
 }
 
 
@@ -384,6 +417,79 @@ write_bond_parameters(const NetplanNetDefinition* def, GString* s)
 }
 
 static void
+write_vxlan_parameters(const NetplanNetDefinition* def, GString* s)
+{
+    g_assert(def->vxlan);
+    GString* params = NULL;
+
+    params = g_string_sized_new(200);
+
+    if (def->tunnel.remote_ip) {
+        if (is_multicast_address(def->tunnel.remote_ip))
+            g_string_append_printf(params, "\nGroup=%s", def->tunnel.remote_ip);
+        else
+            g_string_append_printf(params, "\nRemote=%s", def->tunnel.remote_ip);
+    }
+    if (def->tunnel.local_ip)
+        g_string_append_printf(params, "\nLocal=%s", def->tunnel.local_ip);
+    if (def->vxlan->tos)
+        g_string_append_printf(params, "\nTOS=%d", def->vxlan->tos);
+    if (def->tunnel_ttl)
+        g_string_append_printf(params, "\nTTL=%d", def->tunnel_ttl);
+    if (def->vxlan->mac_learning)
+        g_string_append_printf(params, "\nMacLearning=%s", def->vxlan->mac_learning ? "true" : "false");
+    if (def->vxlan->ageing)
+        g_string_append_printf(params, "\nFDBAgeingSec=%d", def->vxlan->ageing);
+    if (def->vxlan->limit)
+        g_string_append_printf(params, "\nMaximumFDBEntries=%d", def->vxlan->limit);
+    if (def->vxlan->arp_proxy)
+        g_string_append_printf(params, "\nReduceARPProxy=%s", def->vxlan->arp_proxy ? "true" : "false");
+    if (def->vxlan->notifications) {
+        if (def->vxlan->notifications & NETPLAN_VXLAN_NOTIFICATION_L2_MISS)
+            g_string_append(params, "\nL2MissNotification=true");
+        if (def->vxlan->notifications & NETPLAN_VXLAN_NOTIFICATION_L3_MISS)
+            g_string_append(params, "\nL3MissNotification=true");
+    }
+    if (def->vxlan->short_circuit)
+        g_string_append_printf(params, "\nRouteShortCircuit=%s", def->vxlan->short_circuit ? "true" : "false");
+    if (def->vxlan->checksums) {
+        if (def->vxlan->checksums & NETPLAN_VXLAN_CHECKSUM_UDP)
+            g_string_append(params, "\nUDPChecksum=true");
+        if (def->vxlan->checksums & NETPLAN_VXLAN_CHECKSUM_ZERO_UDP6_TX)
+            g_string_append(params, "\nUDP6ZeroChecksumTx=true");
+        if (def->vxlan->checksums & NETPLAN_VXLAN_CHECKSUM_ZERO_UDP6_RX)
+            g_string_append(params, "\nUDP6ZeroChecksumRx=true");
+        if (def->vxlan->checksums & NETPLAN_VXLAN_CHECKSUM_REMOTE_TX)
+            g_string_append(params, "\nRemoteChecksumTx=true");
+        if (def->vxlan->checksums & NETPLAN_VXLAN_CHECKSUM_REMOTE_RX)
+            g_string_append(params, "\nRemoteChecksumRx=true");
+    }
+    if (def->vxlan->extensions) {
+        if (def->vxlan->extensions & NETPLAN_VXLAN_EXTENSION_GROUP_POLICY)
+            g_string_append(params, "\nGroupPolicyExtension=true");
+        if (def->vxlan->extensions & NETPLAN_VXLAN_EXTENSION_GENERIC_PROTOCOL)
+            g_string_append(params, "\nGenericProtocolExtension=true");
+    }
+    if (def->tunnel.port)
+        g_string_append_printf(params, "\nDestinationPort=%d", def->tunnel.port);
+    if (def->vxlan->source_port_min && def->vxlan->source_port_max)
+        g_string_append_printf(params, "\nPortRange=%u-%u",
+                               def->vxlan->source_port_min,
+                               def->vxlan->source_port_max);
+    if (def->vxlan->flow_label != G_MAXUINT)
+        g_string_append_printf(params, "\nFlowLabel=%d", def->vxlan->flow_label);
+    if (def->vxlan->do_not_fragment != NETPLAN_TRISTATE_UNSET)
+        g_string_append_printf(params, "\nIPDoNotFragment=%s", def->vxlan->do_not_fragment ? "true" : "false");
+    if (!def->vxlan->link)
+        g_string_append(params, "\nIndependent=true");
+
+    if (params->len)
+        g_string_append_printf(s, "%s\n", params->str);
+
+    g_string_free(params, TRUE);
+}
+
+static void
 write_netdev_file(const NetplanNetDefinition* def, const char* rootdir, const char* path)
 {
     GString* s = NULL;
@@ -420,6 +526,10 @@ write_netdev_file(const NetplanNetDefinition* def, const char* rootdir, const ch
             g_string_append_printf(s, "Kind=vlan\n\n[VLAN]\nId=%u\n", def->vlan_id);
             break;
 
+        case NETPLAN_DEF_TYPE_VRF:
+            g_string_append_printf(s, "Kind=vrf\n\n[VRF]\nTable=%u\n", def->vrf_table);
+            break;
+
         case NETPLAN_DEF_TYPE_TUNNEL:
             switch(def->tunnel.mode) {
                 case NETPLAN_TUNNEL_MODE_GRE:
@@ -435,6 +545,10 @@ write_netdev_file(const NetplanNetDefinition* def, const char* rootdir, const ch
                                            netplan_tunnel_mode_name(def->tunnel.mode));
                     break;
 
+                case NETPLAN_TUNNEL_MODE_VXLAN:
+                    g_string_append_printf(s, "Kind=vxlan\n\n[VXLAN]\nVNI=%u", def->vxlan->vni);
+                    break;
+
                 case NETPLAN_TUNNEL_MODE_IP6IP6:
                 case NETPLAN_TUNNEL_MODE_IPIP6:
                     g_string_append(s, "Kind=ip6tnl\n");
@@ -447,6 +561,8 @@ write_netdev_file(const NetplanNetDefinition* def, const char* rootdir, const ch
             }
             if (def->tunnel.mode == NETPLAN_TUNNEL_MODE_WIREGUARD)
                 write_wireguard_params(s, def);
+            else if (def->tunnel.mode == NETPLAN_TUNNEL_MODE_VXLAN)
+                write_vxlan_parameters(def, s);
             else
                 write_tunnel_params(s, def);
             break;
@@ -483,7 +599,7 @@ write_route(NetplanIPRoute* r, GString* s)
     if (g_strcmp0(r->type, "unicast") != 0)
         g_string_append_printf(s, "Type=%s\n", r->type);
     if (r->onlink)
-        g_string_append_printf(s, "GatewayOnlink=true\n");
+        g_string_append_printf(s, "GatewayOnLink=true\n");
     if (r->metric != NETPLAN_METRIC_UNSPEC)
         g_string_append_printf(s, "Metric=%d\n", r->metric);
     if (r->table != NETPLAN_ROUTE_TABLE_UNSPEC)
@@ -721,12 +837,18 @@ netplan_netdef_write_network_file(
     if (def->bridge && def->backend != NETPLAN_BACKEND_OVS) {
         g_string_append_printf(network, "Bridge=%s\n", def->bridge);
 
-        if (def->bridge_params.path_cost || def->bridge_params.port_priority)
+        if (   def->bridge_params.path_cost
+            || def->bridge_params.port_priority
+            || def->bridge_neigh_suppress != NETPLAN_TRISTATE_UNSET)
             g_string_append_printf(network, "\n[Bridge]\n");
         if (def->bridge_params.path_cost)
             g_string_append_printf(network, "Cost=%u\n", def->bridge_params.path_cost);
         if (def->bridge_params.port_priority)
             g_string_append_printf(network, "Priority=%u\n", def->bridge_params.port_priority);
+        if (def->bridge_neigh_suppress != NETPLAN_TRISTATE_UNSET) {
+            g_string_append_printf(network, "NeighborSuppression=%s\n", def->bridge_neigh_suppress ? "true" : "false");
+    }
+
     }
     if (def->bond && def->backend != NETPLAN_BACKEND_OVS) {
         g_string_append_printf(network, "Bond=%s\n", def->bond);
@@ -745,6 +867,10 @@ netplan_netdef_write_network_file(
                 g_string_append_printf(network, "VLAN=%s\n", nd->id);
         }
     }
+
+    /* VRF linkage */
+    if (def->vrf_link)
+        g_string_append_printf(network, "VRF=%s\n", def->vrf_link->id);
 
     if (def->routes != NULL) {
         for (unsigned i = 0; i < def->routes->len; ++i) {
@@ -813,6 +939,25 @@ netplan_netdef_write_network_file(
             g_string_append_printf(network, "UseHostname=false\n");
         if (combined_dhcp_overrides.hostname)
             g_string_append_printf(network, "Hostname=%s\n", combined_dhcp_overrides.hostname);
+    }
+
+    /* IP-over-InfiniBand, IPoIB */
+    if (def->ib_mode != NETPLAN_IB_MODE_KERNEL) {
+        g_string_append_printf(network, "\n[IPoIB]\nMode=%s\n", netplan_infiniband_mode_name(def->ib_mode));
+    }
+
+    /* VXLAN options */
+    if (def->has_vxlans) {
+        /* iterate over all netdefs to find VXLANs attached to us */
+        GList *l = np_state->netdefs_ordered;
+        const NetplanNetDefinition* nd;
+        for (; l != NULL; l = l->next) {
+            nd = l->data;
+            if (nd->vxlan && nd->vxlan->link == def &&
+                nd->type == NETPLAN_DEF_TYPE_TUNNEL &&
+                nd->tunnel.mode == NETPLAN_TUNNEL_MODE_VXLAN)
+                g_string_append_printf(network, "VXLAN=%s\n", nd->id);
+        }
     }
 
     if (network->len > 0 || link->len > 0) {
@@ -1020,6 +1165,10 @@ write_wpa_conf(const NetplanNetDefinition* def, const char* rootdir, GError** er
             if (!append_wifi_wowlan_flags(def->wowlan, s, error))
                 return FALSE;
         }
+        /* available as of wpa_supplicant version 0.6.7 */
+        if (def->regulatory_domain) {
+            g_string_append_printf(s, "country=%s\n", def->regulatory_domain);
+        }
         NetplanWifiAccessPoint* ap;
         g_hash_table_iter_init(&iter, def->access_points);
         while (g_hash_table_iter_next(&iter, NULL, (gpointer) &ap)) {
@@ -1113,9 +1262,12 @@ netplan_netdef_write_networkd(
     SET_OPT_OUT_PTR(has_been_written, FALSE);
 
     /* We want this for all backends when renaming, as *.link and *.rules files are
-     * evaluated by udev, not networkd itself or NetworkManager. */
+     * evaluated by udev, not networkd itself or NetworkManager. The regulatory
+     * domain applies to all backends, too. */
     write_link_file(def, rootdir, path_base);
     write_rules_file(def, rootdir);
+    if (def->regulatory_domain)
+        write_regdom(def, rootdir, NULL); /* overwrites global regdom */
 
     if (def->backend != NETPLAN_BACKEND_NETWORKD) {
         g_debug("networkd: definition %s is not for us (backend %i)", def->id, def->backend);
@@ -1173,6 +1325,8 @@ netplan_networkd_cleanup(const char* rootdir)
     unlink_glob(rootdir, "/run/systemd/system/systemd-networkd.service.wants/netplan-wpa-*.service");
     unlink_glob(rootdir, "/run/systemd/system/netplan-wpa-*.service");
     unlink_glob(rootdir, "/run/udev/rules.d/99-netplan-*");
+    unlink_glob(rootdir, "/run/systemd/system/network.target.wants/netplan-regdom.service");
+    unlink_glob(rootdir, "/run/systemd/system/netplan-regdom.service");
     /* Historically (up to v0.98) we had netplan-wpa@*.service files, in case of an
      * upgraded system, we need to make sure to clean those up. */
     unlink_glob(rootdir, "/run/systemd/system/systemd-networkd.service.wants/netplan-wpa@*.service");

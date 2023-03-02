@@ -229,7 +229,8 @@ parse_routes(GKeyFile* kf, const gchar* group, GArray** routes_arr)
             route->to = g_strdup(split[0]); //no need to free, will stay in netdef
         /* Append gateway/via IP */
         if (split[0] && split[1] &&
-            g_strcmp0(split[1], get_unspecified_address(route->family)) != 0) {
+            g_strcmp0(split[1], get_unspecified_address(route->family)) != 0 &&
+            g_strcmp0(split[1], "") != 0) {
             route->scope = g_strdup("global");
             route->via = g_strdup(split[1]); //no need to free, will stay in netdef
         } else {
@@ -298,11 +299,12 @@ parse_dhcp_overrides(GKeyFile* kf, const gchar* group, NetplanDHCPOverrides* dat
     handle_generic_uint(kf, group, "route-metric", &(*dataptr).metric, NETPLAN_METRIC_UNSPEC);
 }
 
+/*
 static void
 parse_search_domains(GKeyFile* kf, const gchar* group, GArray** domains_arr)
 {
-    /* Keep "dns-search" as fallback/passthrough, as netplan cannot
-     * differentiate between ipv4.dns-search and ipv6.dns-search */
+    // Keep "dns-search" as fallback/passthrough, as netplan cannot
+    // differentiate between ipv4.dns-search and ipv6.dns-search
     g_assert(domains_arr);
     gsize len = 0;
     gchar **split = g_key_file_get_string_list(kf, group, "dns-search", &len, NULL);
@@ -323,6 +325,7 @@ parse_search_domains(GKeyFile* kf, const gchar* group, GArray** domains_arr)
         g_strfreev(split);
     }
 }
+*/
 
 static void
 parse_nameservers(GKeyFile* kf, const gchar* group, GArray** nameserver_arr)
@@ -544,9 +547,10 @@ netplan_parser_load_keyfile(NetplanParser* npp, const char* filename, GError** e
     parse_routes(kf, "ipv4", &nd->routes);
     parse_routes(kf, "ipv6", &nd->routes);
 
-    /* DNS: XXX: How to differentiate ip4/ip6 search_domains? */
+    /* DNS: XXX: How to differentiate ip4/ip6 search_domains?
     parse_search_domains(kf, "ipv4", &nd->search_domains);
     parse_search_domains(kf, "ipv6", &nd->search_domains);
+    */
     parse_nameservers(kf, "ipv4", &nd->ip4_nameservers);
     parse_nameservers(kf, "ipv6", &nd->ip6_nameservers);
 

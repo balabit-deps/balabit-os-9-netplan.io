@@ -71,7 +71,7 @@ class _CommonTests():
     englob:
       match: {name: "eth?2"}
       addresses: ["172.16.42.99/18", "1234:FFFF::42/64"]
-''' % {'r': self.backend}) # globbing match on "eth42", i.e. self.dev_e_client
+''' % {'r': self.backend})  # globbing match on "eth42", i.e. self.dev_e_client
         self.generate_and_settle([self.dev_e_client])
         self.assert_iface_up(self.dev_e_client, ['inet 172.16.42.99/18', 'inet6 1234:ffff::42/64'])
 
@@ -117,7 +117,7 @@ class _CommonTests():
             self.assertRegex(out, r'%s\s+(ethernet|bridge)\s+%s' % (i, expected_state))
 
         with open('/etc/resolv.conf') as f:
-                resolv_conf = f.read()
+            resolv_conf = f.read()
 
         if self.backend == 'NetworkManager' and nm_uses_dnsmasq:
             sys.stdout.write('[NM with dnsmasq] ')
@@ -236,9 +236,69 @@ class _CommonTests():
         self.assert_iface_up('iface1', ['inet 10.10.10.11'])
         self.assert_iface_up('iface2', ['inet 10.10.10.22'])
 
+    def test_link_offloading(self):
+        self.setup_eth(None, False)
+        # check kernel defaults
+        out = subprocess.check_output(['ethtool', '-k', self.dev_e_client])
+        self.assertIn(b'rx-checksumming: on', out)
+        self.assertIn(b'tx-checksumming: on', out)
+        self.assertIn(b'tcp-segmentation-offload: on', out)
+        self.assertIn(b'tx-tcp6-segmentation: on', out)
+        self.assertIn(b'generic-segmentation-offload: on', out)
+        # enabled for armhf on autopkgtest.u.c but 'off' elsewhere
+        # self.assertIn(b'generic-receive-offload: off', out)
+        # validate turning off
+        with open(self.config, 'w') as f:
+            f.write('''network:
+  renderer: %(r)s
+  ethernets:
+    %(ec)s:
+      addresses: [10.10.10.22/24]
+      receive-checksum-offload: off
+      transmit-checksum-offload: off
+      tcp-segmentation-offload: off
+      tcp6-segmentation-offload: off
+      generic-segmentation-offload: off
+      generic-receive-offload: off
+      #large-receive-offload: off # not possible on veth
+''' % {'r': self.backend, 'ec': self.dev_e_client})
+        self.generate_and_settle([self.dev_e_client])
+        self.assert_iface_up(self.dev_e_client, ['inet 10.10.10.22'])
+        out = subprocess.check_output(['ethtool', '-k', self.dev_e_client])
+        self.assertIn(b'rx-checksumming: off', out)
+        self.assertIn(b'tx-checksumming: off', out)
+        self.assertIn(b'tcp-segmentation-offload: off', out)
+        self.assertIn(b'tx-tcp6-segmentation: off', out)
+        self.assertIn(b'generic-segmentation-offload: off', out)
+        self.assertIn(b'generic-receive-offload: off', out)
+        # validate turning on
+        with open(self.config, 'w') as f:
+            f.write('''network:
+  renderer: %(r)s
+  ethernets:
+    %(ec)s:
+      addresses: [10.10.10.22/24]
+      receive-checksum-offload: true
+      transmit-checksum-offload: true
+      tcp-segmentation-offload: true
+      tcp6-segmentation-offload: true
+      generic-segmentation-offload: true
+      generic-receive-offload: true
+      #large-receive-offload: true # not possible on veth
+''' % {'r': self.backend, 'ec': self.dev_e_client})
+        self.generate_and_settle([self.dev_e_client])
+        self.assert_iface_up(self.dev_e_client, ['inet 10.10.10.22'])
+        out = subprocess.check_output(['ethtool', '-k', self.dev_e_client])
+        self.assertIn(b'rx-checksumming: on', out)
+        self.assertIn(b'tx-checksumming: on', out)
+        self.assertIn(b'tcp-segmentation-offload: on', out)
+        self.assertIn(b'tx-tcp6-segmentation: on', out)
+        self.assertIn(b'generic-segmentation-offload: on', out)
+        self.assertIn(b'generic-receive-offload: on', out)
+
 
 @unittest.skipIf("networkd" not in test_backends,
-                     "skipping as networkd backend tests are disabled")
+                 "skipping as networkd backend tests are disabled")
 class TestNetworkd(IntegrationTestsBase, _CommonTests):
     backend = 'networkd'
 
@@ -253,7 +313,7 @@ class TestNetworkd(IntegrationTestsBase, _CommonTests):
       dhcp6: no
       accept-ra: yes
       addresses: [ '192.168.1.100/24' ]''' % {'r': self.backend, 'ec': self.dev_e_client})
-        self.generate_and_settle([self.dev_e_client])
+        self.generate_and_settle([self.state_dhcp6(self.dev_e_client)])
         self.assert_iface_up(self.dev_e_client, ['inet6 2600:'], [])
 
     def test_eth_dhcp6_off_no_accept_ra(self):
@@ -312,8 +372,9 @@ class TestNetworkd(IntegrationTestsBase, _CommonTests):
                           ['inet6 9876:bbbb::11/70', 'inet 172.16.5.3/20'],
                           ['inet6 fe80:', 'inet 169.254.'])
 
+
 @unittest.skipIf("NetworkManager" not in test_backends,
-                     "skipping as NetworkManager backend tests are disabled")
+                 "skipping as NetworkManager backend tests are disabled")
 class TestNetworkManager(IntegrationTestsBase, _CommonTests):
     backend = 'NetworkManager'
 

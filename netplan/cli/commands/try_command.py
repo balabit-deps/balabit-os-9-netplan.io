@@ -17,18 +17,19 @@
 
 '''netplan try command line'''
 
+import logging
 import os
 import time
 import shutil
 import signal
 import sys
 import tempfile
-import logging
 
 from netplan.configmanager import ConfigManager
 import netplan.cli.utils as utils
 from netplan.cli.commands.apply import NetplanApply
 import netplan.terminal
+import netplan.libnetplan as libnetplan
 
 # Keep a timeout long enough to allow the network to converge, 60 seconds may
 # be slightly short given some complex configs, i.e. if STP must reconverge.
@@ -44,6 +45,7 @@ class NetplanTry(utils.NetplanCommand):
                          leaf=True)
         self.configuration_changed = False
         self.new_interfaces = None
+        self.config_file = None
         self._config_manager = None
         self.t_settings = None
         self.t = None
@@ -53,7 +55,7 @@ class NetplanTry(utils.NetplanCommand):
     @property
     def config_manager(self):  # pragma: nocover (called by later commands)
         if not self._config_manager:
-            self._config_manager = ConfigManager()
+            self._config_manager = ConfigManager(prefix=self._rootdir)
         return self._config_manager
 
     def clear_ready_stamp(self):
@@ -147,7 +149,7 @@ class NetplanTry(utils.NetplanCommand):
     def cleanup(self):  # pragma: nocover (requires user input)
         self.config_manager.cleanup()
 
-    def is_revertable(self):  # pragma: nocover (requires user input)
+    def is_revertable(self):
         '''
         Check if the configuration is revertable, if it doesn't contain bits
         that we know are likely to render the system unstable if we apply it,
@@ -161,15 +163,15 @@ class NetplanTry(utils.NetplanCommand):
         to not cleanly revert via the backend.
         '''
 
-        # Parse; including any new config file passed on the command-line:
-        # new config might include things we can't revert.
         extra_config = []
         if self.config_file:
             extra_config.append(self.config_file)
-        self.config_manager.parse(extra_config=extra_config)
-        self.new_interfaces = self.config_manager.new_interfaces
-
-        logging.debug("New interfaces: {}".format(self.new_interfaces))
+        np_state = None
+        try:
+            np_state = self.config_manager.parse(extra_config=extra_config)
+        except utils.config_errors as e:
+            logging.error(e)
+            sys.exit(os.EX_CONFIG)
 
         revert_unsupported = []
 
@@ -177,13 +179,13 @@ class NetplanTry(utils.NetplanCommand):
         # more than one device in them, and they can be set with special parameters
         # to tweak their behavior, which are really hard to "revert", especially
         # as systemd-networkd doesn't necessarily touch them when config changes.
-        multi_iface = {}
-        multi_iface.update(self.config_manager.bridges)
-        multi_iface.update(self.config_manager.bonds)
-        for ifname, settings in multi_iface.items():
-            if settings and 'parameters' in settings:
+        multi_iface = {}  # type: dict[str, libnetplan.NetDefinition]
+        multi_iface.update(np_state.bridges)
+        multi_iface.update(np_state.bonds)
+        for itf in multi_iface.values():
+            if not itf.is_trivial_compound_itf:
                 reason = "reverting custom parameters for bridges and bonds is not supported"
-                revert_unsupported.append((ifname, reason))
+                revert_unsupported.append((itf.id, reason))
 
         if revert_unsupported:
             for ifname, reason in revert_unsupported:

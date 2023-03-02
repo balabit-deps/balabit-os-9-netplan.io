@@ -74,6 +74,7 @@ netplan_get_global_backend()
 /**
  * Clear NetplanNetDefinition hashtable
  */
+// LCOV_EXCL_START
 guint
 netplan_clear_netdefs()
 {
@@ -98,7 +99,7 @@ netplan_finish_parse(GError** error)
 {
     if (netplan_state_import_parser_results(&global_state, &global_parser, error))
         return global_state.netdefs;
-    return NULL;
+    return NULL; // LCOV_EXCL_LINE
 }
 
 /**
@@ -112,9 +113,6 @@ write_netplan_conf(const NetplanNetDefinition* def, const char* rootdir)
 {
     netplan_netdef_write_yaml(&global_state, def, rootdir, NULL);
 }
-
-gboolean
-netplan_state_write_yaml(const NetplanState* np_state, const char* file_hint, const char* rootdir, GError** error);
 
 /**
  * Generate the Netplan YAML configuration for all currently parsed netdefs
@@ -182,6 +180,7 @@ _write_netplan_conf(const char* netdef_id, const char* rootdir)
         g_warning("_write_netplan_conf: netdef_id (%s) not found.", netdef_id); // LCOV_EXCL_LINE
 }
 
+// LCOV_EXCL_START
 /**
  * Get the filename from which the given netdef has been parsed.
  * @rootdir: ID of the netdef to be looked up
@@ -192,7 +191,7 @@ netplan_get_filename_by_id(const char* netdef_id, const char* rootdir)
 {
     NetplanParser* npp = netplan_parser_new();
     NetplanState* np_state = netplan_state_new();
-    char *filename = NULL;
+    char *filepath = NULL;
     GError* error = NULL;
 
     if (!netplan_parser_load_yaml_hierarchy(npp, rootdir, &error) ||
@@ -204,12 +203,11 @@ netplan_get_filename_by_id(const char* netdef_id, const char* rootdir)
 
     NetplanNetDefinition* netdef = netplan_state_get_netdef(np_state, netdef_id);
     if (netdef)
-        filename = g_strdup(netplan_netdef_get_filename(netdef));
+        filepath = g_strdup(netdef->filepath);
     netplan_state_clear(&np_state);
-    return filename;
+    return filepath;
 }
 
-// LCOV_EXCL_START
 NETPLAN_INTERNAL struct netdef_pertype_iter*
 _netplan_state_new_netdef_pertype_iter(NetplanState* np_state, const char* devtype);
 
@@ -217,5 +215,18 @@ NETPLAN_INTERNAL struct netdef_pertype_iter*
 _netplan_iter_defs_per_devtype_init(const char *devtype)
 {
     return _netplan_state_new_netdef_pertype_iter(&global_state, devtype);
+}
+
+NETPLAN_INTERNAL const char*
+_netplan_netdef_id(NetplanNetDefinition* netdef)
+{
+    return netdef->id;
+}
+
+NETPLAN_ABI const char *
+netplan_netdef_get_filename(const NetplanNetDefinition* netdef)
+{
+    g_assert(netdef);
+    return netdef->filepath;
 }
 // LCOV_EXCL_STOP
