@@ -1,3 +1,26 @@
+netplan.io (0.105-0ubuntu2~22.04.3) jammy; urgency=medium
+
+  * Fix and improvements for the DBus integration (LP: #1997467)
+    Cherry-picked from upstream: https://github.com/canonical/netplan/pull/331
+    - d/p/lp1997467/0009-dbus-Build-the-copy-path-correctly.patch
+      Properly build the destination path before copying files in the dbus
+      integration and improve error handling
+    - d/p/lp1997467/0010-tests-Add-an-integration-test-for-netplan-dbus.patch
+      Add an integration test to exercise the code path where the issue was
+      addressed.
+
+ -- Danilo Egea Gondolfo <danilo.egea.gondolfo@canonical.com>  Fri, 03 Mar 2023 13:14:22 +0000
+
+netplan.io (0.105-0ubuntu2~22.04.2) jammy; urgency=medium
+
+  * d/p/lp1997467: set only specific origin-hint if given (LP: #1997467)
+    Cherry-picked from upstream: https://github.com/canonical/netplan/pull/299
+    - d/libnetplan0.symbols: Add netplan_parser_load_nullable_overrides() API
+    - d/p/0008-src-parse-plug-memory-leaks-in-nullable-handling.patch backport
+      upstream commit 40c53bb (memory leak fixup of PR#299)
+
+ -- Danilo Egea Gondolfo <danilo.egea.gondolfo@canonical.com>  Mon, 13 Feb 2023 12:40:20 +0000
+
 netplan.io (0.105-0ubuntu2~22.04.1) jammy; urgency=medium
 
   * Backport netplan.io 0.105-0ubuntu2 to 22.04 (LP: #1988447)

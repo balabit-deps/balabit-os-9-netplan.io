@@ -1,1 +1,10 @@
 autopkgtest-fixes.patch
+
+lp1997467/0003-generate-util-fix-double-slash-root-filepath.patch
+lp1997467/0004-test-cli-set-add-regression-cases-for-LP-1997467.patch
+lp1997467/0005-parse-Allow-loading-nullable-origin-hint-overrides-n.patch
+lp1997467/0006-cli-set-fix-origin-hint-handling-LP-1997467.patch
+lp1997467/0007-src-parse-netplan-write-global-renderer-depending-on.patch
+lp1997467/0008-src-parse-plug-memory-leaks-in-nullable-handling.patch
+lp1997467/0009-dbus-Build-the-copy-path-correctly.patch
+lp1997467/0010-tests-Add-an-integration-test-for-netplan-dbus.patch

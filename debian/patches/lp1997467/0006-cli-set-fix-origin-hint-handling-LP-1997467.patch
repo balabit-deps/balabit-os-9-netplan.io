@@ -1,0 +1,189 @@
+From: =?utf-8?q?Lukas_M=C3=A4rdian?= <slyon@ubuntu.com>
+Date: Wed, 11 Jan 2023 15:02:55 +0100
+Subject: cli:set: fix origin-hint handling (LP: #1997467)
+
+When using the new libnetplan YAML parser, we need to ignore any global values
+(like "renderer") or netdefs (that are part of a given YAML patch) when parsing
+the existing YAML hierarchy, unless they're about to be parsed from an existing
+origin-hint file of the same name.
+
+That is to avoid assigning updates to those stanzas/netdefs to existing network
+definitions inside other files (not the origin-hint), as this would lead to
+those updates being ignored when we're writing out just the single origin-hint
+file (using state.write_yaml_file()). We still need to parse and validate the
+full context of other netdefs (not part of a given YAML patch), as the patch
+might reference existing netdefs (e.g. as bridge interfaces), or change current
+configuration in a way that makes it invalid (e.g. changing vrf tables),
+therefore they need to exist in the (validation-)parser's context. Also we
+need to parse such netdefs from an origin-hint file of same name, as we'd want
+update the definition in that file (instead of overriding it).
+
+We do this by adding relevant global values and netdefs, which are part of the
+YAML patch, to the "null_overrides" data, before parsing the full YAML
+hierarchy. Adding the filename of the origin-hint as a constraint, which can be
+checked when parsing to not ignore relevant netdefs from an exsisting
+origin-hint file.
+---
+ netplan/cli/commands/set.py | 60 +++++++++++++++++++++++++++++++++++++++------
+ tests/test_cli_get_set.py   | 51 ++++++++++++++++++++++++++++++++++++--
+ 2 files changed, 101 insertions(+), 10 deletions(-)
+
+diff --git a/netplan/cli/commands/set.py b/netplan/cli/commands/set.py
+index ee82fa0..04d6e55 100644
+--- a/netplan/cli/commands/set.py
++++ b/netplan/cli/commands/set.py
+@@ -1,7 +1,7 @@
+ #!/usr/bin/python3
+ #
+-# Copyright (C) 2020 Canonical, Ltd.
+-# Author: Lukas Märdian <lukas.maerdian@canonical.com>
++# Copyright (C) 2020-2023 Canonical, Ltd.
++# Author: Lukas Märdian <slyon@ubuntu.com>
+ #
+ # This program is free software; you can redistribute it and/or modify
+ # it under the terms of the GNU General Public License as published by
+@@ -71,15 +71,59 @@ class NetplanSet(NetplanCommand):
+         with tempfile.TemporaryFile() as tmp:
+             libnetplan.create_yaml_patch(yaml_path, value, tmp)
+             tmp.flush()
++
++            # Load fields that are about to be deleted (e.g. some.setting=NULL)
++            # Ignore those fields when parsing subsequent YAML files
+             tmp.seek(0, io.SEEK_SET)
+             parser.load_nullable_fields(tmp)
++
++            # Parse the full, existing YAML config hierarchy
+             parser.load_yaml_hierarchy(self.root_dir)
++
++            # Load YAML patch, containing our update (new or deleted settings)
+             tmp.seek(0, io.SEEK_SET)
+             parser.load_yaml(tmp)
+ 
+-        state = libnetplan.State()
+-        state.import_parser_results(parser)
+-        if self.origin_hint:
+-            state.write_yaml_file(filename, self.root_dir)
+-        else:
+-            state.update_yaml_hierarchy(FALLBACK_FILENAME, self.root_dir)
++            # Validate the final parser state
++            state = libnetplan.State()
++            state.import_parser_results(parser)
++
++            if filename:  # only act on the output file (a.k.a. "origin-hint")
++                parser_output_file = libnetplan.Parser()
++
++                # Load fields that are about to be deleted ("some.setting=NULL")
++                # Ignore those fields when parsing subsequent YAML files
++                tmp.seek(0, io.SEEK_SET)
++                parser_output_file.load_nullable_fields(tmp)
++
++                # Load globals/netdefs that are to be ignored from the existing
++                # YAML hierarchy, as our patch is supposed to override settings
++                # in those netdefs via the output file.
++                # Those netdefs and globals must end up in the output file
++                # (a.k.a. "origin-hint", <filename>), have they been defined in
++                # pre-existing YAML files or not.
++                tmp.seek(0, io.SEEK_SET)
++                parser_output_file.load_nullable_overrides(tmp, constraint=filename)
++
++                # Parse the full YAML hierarchy and new patch, ignoring any
++                # nullable overrides (netdefs/globals) from pre-existing files
++                # and ignoring any nullable fields (settings to be deleted).
++                # This way we can avoid updates to certain netdefs/globals to be
++                # redirected into existing YAML files (defining those same
++                # stanzas) or ignored, but have them written out to the single
++                # output file.
++                # XXX: The origin file of each individual YAML setting/stanza
++                #      should be tracked individually, to avoid this
++                #      double-parsing workaround (LP: #2003727)
++                parser_output_file.load_yaml_hierarchy(self.root_dir)
++                tmp.seek(0, io.SEEK_SET)
++                parser_output_file.load_yaml(tmp)
++
++                # Import the partial parser state, ignoring duplicated netdefs
++                # from pre-existing YAML files, so we can force write the patch
++                # contents to the output file or update this file if exists.
++                state_output_file = libnetplan.State()
++                state_output_file.import_parser_results(parser_output_file)
++                state_output_file.write_yaml_file(filename, self.root_dir)
++            else:
++                state.update_yaml_hierarchy(FALLBACK_FILENAME, self.root_dir)
+diff --git a/tests/test_cli_get_set.py b/tests/test_cli_get_set.py
+index c4ed860..3f32e93 100644
+--- a/tests/test_cli_get_set.py
++++ b/tests/test_cli_get_set.py
+@@ -25,6 +25,7 @@ import glob
+ 
+ import yaml
+ 
++from netplan.libnetplan import LibNetplanException
+ from tests.test_utils import call_cli
+ 
+ 
+@@ -97,18 +98,64 @@ class TestSet(unittest.TestCase):
+         with open(p, 'r') as f:
+             self.assertIs(True, yaml.safe_load(f)['network']['ethernets']['eth0']['dhcp4'])
+ 
++    def test_set_origin_hint_update(self):
++        hint = os.path.join(self.workdir.name, 'etc', 'netplan', 'hint.yaml')
++        with open(hint, 'w') as f:
++            f.write('''network:
++  version: 2
++  renderer: networkd
++  ethernets: {eth0: {dhcp6: true}}''')
++        self._set(['ethernets.eth0={dhcp4: true, dhcp6: NULL}', '--origin-hint=hint'])
++        self.assertTrue(os.path.isfile(hint))
++        with open(hint, 'r') as f:
++            yml = yaml.safe_load(f)
++            self.assertEqual(2, yml['network']['version'])
++            self.assertEqual('networkd', yml['network']['renderer'])
++            self.assertTrue(yml['network']['ethernets']['eth0']['dhcp4'])
++            self.assertNotIn('dhcp6', yml['network']['ethernets']['eth0'])
++
+     def test_set_origin_hint_override(self):
+         defaults = os.path.join(self.workdir.name, 'etc', 'netplan', '0-snapd-defaults.yaml')
+         with open(defaults, 'w') as f:
+             f.write('''network:
+-  bridges: {br54: {dhcp4: true}}
++  renderer: NetworkManager
++  bridges: {br54: {dhcp4: true, dhcp6: true}}
+   ethernets: {eth0: {dhcp4: true}}''')
++        self._set(['bridges.br55.dhcp4=false', '--origin-hint=90-snapd-config'])
+         self._set(['bridges.br54.dhcp4=false', '--origin-hint=90-snapd-config'])
+         self._set(['bridges.br54.interfaces=[eth0]', '--origin-hint=90-snapd-config'])
+         p = os.path.join(self.workdir.name, 'etc', 'netplan', '90-snapd-config.yaml')
+         self.assertTrue(os.path.isfile(p))
+         with open(p, 'r') as f:
+-            self.assertIs(False, yaml.safe_load(f)['network']['bridges']['br54']['dhcp4'])
++            yml = yaml.safe_load(f)
++            self.assertIs(False, yml['network']['bridges']['br54']['dhcp4'])
++            self.assertNotIn('dhcp6', yml['network']['bridges']['br54'])
++            self.assertEqual(['eth0'], yml['network']['bridges']['br54']['interfaces'])
++            self.assertIs(False, yml['network']['bridges']['br55']['dhcp4'])
++
++    def test_set_origin_hint_override_invalid_netdef_setting(self):
++        defaults = os.path.join(self.workdir.name, 'etc', 'netplan', '0-snapd-defaults.yaml')
++        with open(defaults, 'w') as f:
++            f.write('''network:
++  vrfs:
++    vrf0:
++      table: 1005
++      routes:
++      - to: default
++        via: 10.10.10.4
++        table: 1005
++''')
++        with self.assertRaises(LibNetplanException) as e:
++            self._set(['vrfs.vrf0.table=1004', '--origin-hint=90-snapd-config'])
++        self.assertIn('vrf0: VRF routes table mismatch (1004 != 1005)', str(e.exception))
++        # hint/output file should not exist
++        p = os.path.join(self.workdir.name, 'etc', 'netplan', '90-snapd-config.yaml')
++        self.assertFalse(os.path.isfile(p))
++        # original (defaults) file should stay untouched
++        self.assertTrue(os.path.isfile(defaults))
++        with open(defaults, 'r') as f:
++            yml = yaml.safe_load(f)
++            self.assertEqual(1005, yml['network']['vrfs']['vrf0']['table'])
+ 
+     def test_set_origin_hint_extend(self):
+         p = os.path.join(self.workdir.name, 'etc', 'netplan', '90-snapd-config.yaml')

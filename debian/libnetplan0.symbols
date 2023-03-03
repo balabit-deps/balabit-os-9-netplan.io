@@ -59,6 +59,7 @@ libnetplan.so.0.0 libnetplan0 #MINVER#
  netplan_parser_clear@Base 0.104
  netplan_parser_load_keyfile@Base 0.104
  netplan_parser_load_nullable_fields@Base 0.105
+ netplan_parser_load_nullable_overrides@Base 0.105-0ubuntu2~22.04.2~
  netplan_parser_load_yaml@Base 0.104
  netplan_parser_load_yaml_from_fd@Base 0.105
  netplan_parser_load_yaml_hierarchy@Base 0.104
