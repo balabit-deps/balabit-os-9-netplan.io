@@ -1,3 +1,134 @@
+netplan.io (0.106.1-7ubuntu0.22.04.2) jammy; urgency=medium
+
+  * Drop d/p/sru-compat/0024-Avoid-unnecessary-export-of-API.patch.
+    Also, update the .symbols file, according to SRU review.
+
+ -- Lukas Märdian <slyon@ubuntu.com>  Mon, 04 Sep 2023 11:17:14 +0200
+
+netplan.io (0.106.1-7ubuntu0.22.04.1) jammy; urgency=medium
+
+  * Backport netplan.io 0.106.1-7 to 22.04 (LP: #2025519)
+    - New 'netplan status' CLI (!290)
+    - API: implement APIs from the new specification (!298)
+    - Check and fix non-inclusive laguange (!303)
+    - Documentation improvements (using Diátaxis & RTD)
+    - Match by PermanentMACAddress (!278)
+    - Netplan api iterator (!306)
+    - API: update netplan_delete_connection() (!322)
+    - NM 1.40 compat & file permission fixes (!300), LP: 1862600, LP: 1997348
+    - Migrate from (deprecated) nose to pytest (!302)
+    - parse: Add the filepath to OVS ports netdefs (!295)
+    - Check if the interface name is too long (!313), LP: 1988749
+    - doc/examples: remove unnecessary route for IPv6 on-link gateways (!312)
+    - Memory leak CI action (!321)
+    - tests:base:ethernets: Improve stability of autopkgtests (!223)
+    - Add all the commands to the bash completion file (LP: 1749869)
+    - parse-nm: fix eap_method handling (LP: 2016625)
+    - ovs: don't allow peers with the same name
+    - parse: validate NM backend settings usage
+    - nm: check the passthrough config format
+    - wireguard: plug a memory leak
+    - validate: drop the YAML node parameter
+    - parse: don't point to the wrong node on validation
+    - parse: set the backend on nm-devices to NM by default
+    - parse: plug a memory leak
+    - nm: return if write_routes() fails
+    - libnetplan: don't try to read from a NULL file
+    - networkd: plug a memory leak
+    - vrfs: skip policies parsing if list is NULL (LP: 2016427)
+    - parse: use "--" with systemd-escape
+    - netplan: adjust the maximum buffer size to 1MB
+    - cli:status: improve networkctl parameter passing
+    - cli:test: use 'text' alias instead of 'universal_newlines'
+    - cli:apply: use shutil.rmtree instead of 'rm -rf'
+    - Use controlled execution environment, to avoid failure if PATH is unset
+      (LP: 1959570)
+    - meson: fix installation of legacy /lib/netplan/generate symlink
+    - dbus: Use the error set by _copy_yaml_state()
+    - dbus: Build the copy path correctly (LP: 1997467)
+    - parse:ovs: Ignore deprecated OpenFlow1.6 protocol (LP: 1963735)
+    - parser: Don't duplicate OVS configuration (LP: 2007682)
+    - parser: Don't add DNS entries duplicates (LP: 2007682)
+    - parser: handle duplicated routing rules (LP: 2007682)
+    - netplan: cli: fix typo from 'unkown' to 'unknown'
+    - meson: cli:utils: drop legacy generator path, use libexec instead
+    - meson: use meson_make_symlink.sh helper instead of install_symlink()
+    - ATTN: parser: validate lacp-rate properly (LP: 1745648)
+    - parser: demote the new lacp-rate check to warning
+    - Don't drop files with just global values on 'set' (LP: 2027584)
+      d/p/0020-netplan.c-Don-t-drop-files-with-just-global-values-o.patch
+    - Add parser support for WPA3 Personal (LP: 2023238)
+    - d/patches/lp2016473: Keyfile parsing for all tunnel types, LP: 2016473
+    - d/p/lp2021884: WireGuard: auto append prefix to allowed IPs, LP: 2021884
+    - d/p/lp1997467: Improve DEP-3 headers
+    - Fix some memory leaks (!297)
+    - parser: plug a memory leak (!309)
+    - src:parse: plug memory leaks in nullable handling (!319)
+    - Fix 'netplan ip leases' crash (!301), LP: 1996941
+    - tests: mock calls to systemctl (!314)
+    - ctests: fix an integer conversion issue (!315)
+    - docs: small fix on netplan-set doc (!316)
+    - parser: return the correct error on failure (!308), LP: 2000324
+    - apply: Fix crash when OVS is stopped (!307),LP: 1995598
+    - networkd: make sure VXLAN is in the right section (!310), LP: 2000713
+    - cli:set: update only specific origin-hint if given (!299), LP: 1997467
+    - vxlan: convert some settings to tristate (!311), LP: 2000712
+    - parser: check for route duplicates (!320), LP: 2003061
+    [CI]
+    - CI: make use of the canonical/setup-lxd action
+    - Add new spread based snapd integration test
+    - Add some integration tests for DBus
+    - CI: update canonical/setup-lxd to v0.1.1
+    - Makefile: fully cleanup coverage data
+    - spread.yaml: restore /etc/netplan for each test
+    - tests: Don't use duplicated DNS entries (LP: 2007682)
+    - rpm: Refresh packaging for 0.106 and sync from Fedora
+    - meson: Enable finding pycoverage on RPM based distributions
+    - Fix ethernets,vlans,scenarios autopkgtests on systemd 254
+    - Fix NetworkManager interaction with systemd v253
+    - Fix tunnels tests with iproute 6.4, using JSON interface
+    - d/t/prep-testbed.sh: stop NetworkManager, to start with a common state
+    - autopkgtest:regressions: Simplify assertions to avoid buffering races
+      d/p/0018-tests-regressions-simplify-assertions-to-avoid-buffe.patch
+    - Increase test timeouts to fix FTBFS on mips64el and riscv64
+      d/p/0012-meson-Increase-test-timeout-for-slow-architectures.patch
+    - debian/tests: Enforce more strict integration tests.
+      Also, resolve the systemd-resolved issue in ethernets test.
+    - Add d/p/0012-meson-Increase-test-timeout-for-slow-architectures.patch
+      To fix FTBFS due to test timeouts on mipsel, alpha, riscv64, sparc64
+    - debian/tests: Fix testbed timeout with systemd v253 (Closes: #1033265)
+    [Docs]
+    - Netplan docs rework (Part 2)
+    - Netplan docs rework
+    - Add a short netplan-everywhere howto
+    - Add Ubuntu Code of Conduct 2.0
+    - rtd: set the OS and Python versions explicitly
+    - docs: fix bridge parameters types and add examples
+  * d/rules,d/control,d/libnetplan.io.install,d/libnetplan-dev.install:
+    Make use of meson build system and enable hardening flags.
+    Ship netplan.pc file and copy netplan's systemd generator to LIBEXECDIR.
+  * d/control: bump Standards-Version to 4.6.2, no changes needed
+  * d/t/control: prepare Debian testbed
+  * d/control: Add python3-dbus, python3-rich deps, also CMocka and Pytest B-Ds
+  * d/watch: fix checking for upstream tags
+  * d/copyright: update for 2023
+  * d/source/: add lintian-overrides
+  * d/patches/: Drop patches, applied upstream
+  * d/control: Cleanup list of Uploaders.
+  * d/control: Update Lukas' DD email address
+  * Revert usrmerge packaging changes for stable series
+  * Add patches for SRU backwards compatbility
+    d/p/sru-compat/cli-status-Make-rich-pretty-printing-optional-388.patch
+    d/p/sru-compat/validation-avoid-new-yaml_error-in-SRU.patch
+    d/p/sru-compat/Avoid-unnecessary-export-of-API.patch
+    d/p/sru-compat/Revert-ovs-don-t-allow-peers-with-the-same-name.patch
+    d/p/sru-compat/parse-add-comment-about-OpenFlow16-deprecation.patch
+  * d/t/sru-compat: Add patches for Jammy LTS backwards compatibility
+  * Update symbols file for 0.106.1, avoiding any unnecessary exports
+  * d/control: Drop python3-rich dependency to Suggests
+
+ -- Lukas Märdian <slyon@ubuntu.com>  Thu, 24 Aug 2023 12:11:14 +0200
+
 netplan.io (0.105-0ubuntu2~22.04.3) jammy; urgency=medium
 
   * Fix and improvements for the DBus integration (LP: #1997467)

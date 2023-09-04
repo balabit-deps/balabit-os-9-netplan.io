@@ -1,0 +1,2 @@
+# false positive
+netplan.io source: very-long-line-length-in-source-file * > * [tests/cli/test_status.py:*]

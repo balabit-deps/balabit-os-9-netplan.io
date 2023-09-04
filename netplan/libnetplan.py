@@ -56,7 +56,7 @@ lib.netplan_get_id_from_nm_filename.restype = ctypes.c_char_p
 
 def _string_realloc_call_no_error(function):
     size = 16
-    while size < 1073741824:  # 1MB
+    while size < 1048576:  # 1MB
         buffer = ctypes.create_string_buffer(size)
         code = function(buffer)
         if code == -2:
@@ -69,7 +69,7 @@ def _string_realloc_call_no_error(function):
             return None  # pragma: nocover as it's hard to trigger for now
         else:
             return buffer.value.decode('utf-8')
-    raise LibNetplanException('Aborting due to string buffer size > 1M')  # pragma: nocover
+    raise LibNetplanException('Halting due to string buffer size > 1M')  # pragma: nocover
 
 
 def _checked_lib_call(fn, *args):
@@ -99,6 +99,10 @@ class Parser:
         lib.netplan_parser_load_nullable_fields.argtypes = [_NetplanParserP, c_int, _GErrorPP]
         lib.netplan_parser_load_nullable_fields.restype = c_int
 
+        lib.netplan_parser_load_nullable_overrides.argtypes =\
+            [_NetplanParserP, c_int, c_char_p, _GErrorPP]
+        lib.netplan_parser_load_nullable_overrides.restype = c_int
+
         cls._abi_loaded = True
 
     def __init__(self):
@@ -119,6 +123,10 @@ class Parser:
 
     def load_nullable_fields(self, input_file: IO):
         _checked_lib_call(lib.netplan_parser_load_nullable_fields, self._ptr, input_file.fileno())
+
+    def load_nullable_overrides(self, input_file: IO, constraint: str):
+        _checked_lib_call(lib.netplan_parser_load_nullable_overrides,
+                          self._ptr, input_file.fileno(), constraint.encode('utf-8'))
 
 
 class State:
@@ -278,11 +286,20 @@ class NetDefinition:
         lib._netplan_netdef_get_critical.argtypes = [_NetplanNetDefinitionP]
         lib._netplan_netdef_get_critical.restype = c_int
 
-        lib._netplan_netdef_get_sriov_link.argtypes = [_NetplanNetDefinitionP]
-        lib._netplan_netdef_get_sriov_link.restype = _NetplanNetDefinitionP
+        lib.netplan_netdef_get_sriov_link.argtypes = [_NetplanNetDefinitionP]
+        lib.netplan_netdef_get_sriov_link.restype = _NetplanNetDefinitionP
 
-        lib._netplan_netdef_get_vlan_link.argtypes = [_NetplanNetDefinitionP]
-        lib._netplan_netdef_get_vlan_link.restype = _NetplanNetDefinitionP
+        lib.netplan_netdef_get_vlan_link.argtypes = [_NetplanNetDefinitionP]
+        lib.netplan_netdef_get_vlan_link.restype = _NetplanNetDefinitionP
+
+        lib.netplan_netdef_get_bridge_link.argtypes = [_NetplanNetDefinitionP]
+        lib.netplan_netdef_get_bridge_link.restype = _NetplanNetDefinitionP
+
+        lib.netplan_netdef_get_bond_link.argtypes = [_NetplanNetDefinitionP]
+        lib.netplan_netdef_get_bond_link.restype = _NetplanNetDefinitionP
+
+        lib.netplan_netdef_get_peer_link.argtypes = [_NetplanNetDefinitionP]
+        lib.netplan_netdef_get_peer_link.restype = _NetplanNetDefinitionP
 
         lib._netplan_netdef_get_vlan_id.argtypes = [_NetplanNetDefinitionP]
         lib._netplan_netdef_get_vlan_id.restype = c_uint
@@ -333,17 +350,38 @@ class NetDefinition:
 
     @property
     def sriov_link(self):
-        link_ptr = lib._netplan_netdef_get_sriov_link(self._ptr)
+        link_ptr = lib.netplan_netdef_get_sriov_link(self._ptr)
         if link_ptr:
             return NetDefinition(self._parent, link_ptr)
         return None
 
     @property
     def vlan_link(self):
-        link_ptr = lib._netplan_netdef_get_vlan_link(self._ptr)
+        link_ptr = lib.netplan_netdef_get_vlan_link(self._ptr)
         if link_ptr:
             return NetDefinition(self._parent, link_ptr)
         return None
+
+    @property
+    def bridge_link(self):
+        link_ptr = lib.netplan_netdef_get_bridge_link(self._ptr)
+        if link_ptr:
+            return NetDefinition(self._parent, link_ptr)
+        return None
+
+    @property
+    def bond_link(self):
+        link_ptr = lib.netplan_netdef_get_bond_link(self._ptr)
+        if link_ptr:
+            return NetDefinition(self._parent, link_ptr)
+        return None
+
+    @property
+    def peer_link(self):
+        link_ptr = lib.netplan_netdef_get_peer_link(self._ptr)
+        if link_ptr:
+            return NetDefinition(self._parent, link_ptr)
+        return None  # pragma: nocover (ovs ports are always defined in pairs)
 
     @property
     def vlan_id(self):

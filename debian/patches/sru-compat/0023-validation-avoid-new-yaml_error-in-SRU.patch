@@ -1,0 +1,45 @@
+From: =?utf-8?q?Lukas_M=C3=A4rdian?= <slyon@ubuntu.com>
+Date: Wed, 23 Aug 2023 17:28:45 +0200
+Subject: validation: avoid new yaml_error in SRU
+
+This partially reverts 47dc59ece5cc24121a22be81a11e5d16da1548db for SRU compatibility.
+---
+ src/validation.c                    | 2 +-
+ tests/generator/test_passthrough.py | 4 ++--
+ 2 files changed, 3 insertions(+), 3 deletions(-)
+
+diff --git a/src/validation.c b/src/validation.c
+index 3939e04..1f2629f 100644
+--- a/src/validation.c
++++ b/src/validation.c
+@@ -409,7 +409,7 @@ validate_netdef_grammar(const NetplanParser* npp, NetplanNetDefinition* nd, GErr
+         backend = npp->global_backend;
+ 
+     if (nd->has_backend_settings_nm && backend != NETPLAN_BACKEND_NM) {
+-            return yaml_error(npp, NULL, error, "%s: networkmanager backend settings found but renderer is not NetworkManager.", nd->id);
++            g_warning("%s: networkmanager backend settings found but renderer is not NetworkManager.", nd->id);
+     }
+ 
+     valid = TRUE;
+diff --git a/tests/generator/test_passthrough.py b/tests/generator/test_passthrough.py
+index 8e99af4..bbba7bb 100644
+--- a/tests/generator/test_passthrough.py
++++ b/tests/generator/test_passthrough.py
+@@ -347,7 +347,7 @@ method=auto
+         passthrough:
+           connection.type: vpn
+           itsmissingadot: abc
+-  renderer: NetworkManager''', expect_fail=True, skip_generated_yaml_validation=True)
++  renderer: NetworkManager''', expect_fail=False, skip_generated_yaml_validation=True)
+ 
+         self.assertIn("NetworkManager: passthrough key 'itsmissingadot' format is invalid, should be 'group.key'", out)
+ 
+@@ -360,7 +360,7 @@ method=auto
+           networkmanager:
+             name: connection_name
+             passthrough:
+-              new.option: abc''', expect_fail=True, skip_generated_yaml_validation=True)
++              new.option: abc''', expect_fail=False, skip_generated_yaml_validation=True)
+ 
+         self.assertIn("wlan0: networkmanager backend settings found but renderer is not NetworkManager", out)
+ 

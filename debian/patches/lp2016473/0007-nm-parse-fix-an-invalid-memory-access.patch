@@ -1,0 +1,25 @@
+From: Danilo Egea Gondolfo <danilo.egea.gondolfo@canonical.com>
+Date: Fri, 19 May 2023 16:37:00 +0100
+Subject: nm-parse: fix an invalid memory access
+
+Bug: https://bugs.launchpad.net/netplan/+bug/2016473
+Origin: https://github.com/canonical/netplan/commit/4439768
+
+The keyfile is already being automatically released.
+---
+ src/parse-nm.c | 2 --
+ 1 file changed, 2 deletions(-)
+
+diff --git a/src/parse-nm.c b/src/parse-nm.c
+index d3cfe06..9ae6090 100644
+--- a/src/parse-nm.c
++++ b/src/parse-nm.c
+@@ -921,8 +921,6 @@ only_passthrough:
+         read_passthrough(kf, &nd->backend_settings.passthrough);
+     }
+ 
+-    g_key_file_free(kf);
+-
+     /* validate definition-level conditions */
+     if (!npp->missing_id)
+         npp->missing_id = g_hash_table_new_full(g_str_hash, g_str_equal, NULL, g_free);

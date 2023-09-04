@@ -1,4 +1,5 @@
 lib/netplan/*
 lib/systemd/system-generators/netplan
+usr/libexec/netplan/*
 usr/share/*
 usr/sbin/netplan

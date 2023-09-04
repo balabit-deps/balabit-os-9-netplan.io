@@ -112,7 +112,7 @@ class _CommonTests():
 
         # ensure that they do not get managed by NM for foreign backends
         expected_state = (self.backend == 'NetworkManager') and 'connected' or 'unmanaged'
-        out = subprocess.check_output(['nmcli', 'dev'], universal_newlines=True)
+        out = subprocess.check_output(['nmcli', 'dev'], text=True)
         for i in [self.dev_e_client, self.dev_e2_client]:
             self.assertRegex(out, r'%s\s+(ethernet|bridge)\s+%s' % (i, expected_state))
 
@@ -125,12 +125,12 @@ class _CommonTests():
             self.assertRegex(resolv_conf, 'search.*fakesuffix')
             # not easy to peek dnsmasq's brain, so check its logging
             out = subprocess.check_output(['journalctl', '--quiet', '-tdnsmasq', '-ocat', '--since=-30s'],
-                                          universal_newlines=True)
+                                          text=True)
             self.assertIn('nameserver 172.1.2.3', out)
         elif resolved_in_use():
             sys.stdout.write('[resolved] ')
             sys.stdout.flush()
-            out = subprocess.check_output(['resolvectl', 'status'], universal_newlines=True)
+            out = subprocess.check_output(['resolvectl', 'status'], text=True)
             self.assertIn('DNS Servers: 172.1.2.3', out)
             self.assertIn('fakesuffix', out)
         else:
@@ -232,6 +232,7 @@ class _CommonTests():
       set-name: iface2
       addresses: [10.10.10.22/24]
 ''' % {'r': self.backend, 'ec': self.dev_e_client, 'e2c_mac': self.dev_e2_client_mac})
+        self.match_veth_by_non_permanent_mac_quirk('idy', self.dev_e2_client_mac)
         self.generate_and_settle(['iface1', 'iface2'])
         self.assert_iface_up('iface1', ['inet 10.10.10.11'])
         self.assert_iface_up('iface2', ['inet 10.10.10.22'])

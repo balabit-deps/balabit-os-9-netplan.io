@@ -1,16 +1,16 @@
 Format: https://www.debian.org/doc/packaging-manuals/copyright-format/1.0/
 Upstream-Name: netplan.io
-Upstream-Contact: Łukasz 'sil2100' Zemczak <lukasz.zemczak@canonical.com>
+Upstream-Contact: Lukas Märdian <slyon@ubuntu.com>
 Source: https://github.com/canonical/netplan
 
 Files: *
-Copyright: 2016—2020 Canonical Ltd.
+Copyright: 2016—2023 Canonical Ltd.
 License: GPL-3
 
 Files: debian/*
 Copyright:
- 2016—2020 Canonical Ltd.
- 2018—2020 Andrej Shadura <andrewsh@debian.org>
+ 2016—2023 Canonical Ltd.
+ 2018—2023 Andrej Shadura <andrewsh@debian.org>
 License: GPL-3
 
 License: GPL-3

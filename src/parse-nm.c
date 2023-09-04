@@ -23,7 +23,7 @@
 #include "parse-nm.h"
 #include "parse.h"
 #include "util.h"
-#include "types.h"
+#include "types-internal.h"
 #include "util-internal.h"
 #include "validation.h"
 
@@ -352,15 +352,29 @@ parse_dot1x_auth(GKeyFile* kf, NetplanAuthenticationSettings* auth)
     g_assert(auth);
     g_autofree gchar* method = g_key_file_get_string(kf, "802-1x", "eap", NULL);
 
-    if (method && g_strcmp0(method, "tls") == 0) {
-        auth->eap_method = NETPLAN_AUTH_EAP_TLS;
-        _kf_clear_key(kf, "802-1x", "eap");
-    } else if (method && g_strcmp0(method, "peap") == 0) {
-        auth->eap_method = NETPLAN_AUTH_EAP_PEAP;
-        _kf_clear_key(kf, "802-1x", "eap");
-    } else if (method && g_strcmp0(method, "ttls") == 0) {
-        auth->eap_method = NETPLAN_AUTH_EAP_TTLS;
-        _kf_clear_key(kf, "802-1x", "eap");
+    if (method && g_strcmp0(method, "") != 0) {
+        gchar** split = g_strsplit(method, ";", 2);
+        gchar* first_method = split[0];
+
+        if (g_strcmp0(first_method, "tls") == 0) {
+            auth->eap_method = NETPLAN_AUTH_EAP_TLS;
+        } else if (g_strcmp0(first_method, "peap") == 0) {
+            auth->eap_method = NETPLAN_AUTH_EAP_PEAP;
+        } else if (g_strcmp0(first_method, "ttls") == 0) {
+            auth->eap_method = NETPLAN_AUTH_EAP_TTLS;
+        }
+
+        /* If "method" (which is a list separated by ";") has more than one value,
+         * we keep the key so it will also be written as a passthrough key.
+         * That's required because Network Manager accepts multiple methods
+         * but Netplan accepts only one.
+         *
+         * TODO: eap_method needs to be fixed to store multiple methods.
+         */
+        if (split[1] == NULL || !g_strcmp0(split[1], ""))
+            _kf_clear_key(kf, "802-1x", "eap");
+
+        g_strfreev(split);
     }
 
     handle_generic_str(kf, "802-1x", "identity", &auth->identity);
@@ -446,6 +460,7 @@ netplan_parser_load_keyfile(NetplanParser* npp, const char* filename, GError** e
     g_autofree gchar* wifi_mode = NULL;
     g_autofree gchar* ssid = NULL;
     g_autofree gchar* netdef_id = NULL;
+    ssize_t netdef_id_size = 0;
     gchar *tmp_str = NULL;
     NetplanNetDefinition* nd = NULL;
     NetplanWifiAccessPoint* ap = NULL;
@@ -460,7 +475,8 @@ netplan_parser_load_keyfile(NetplanParser* npp, const char* filename, GError** e
     if (!ssid)
         ssid = g_key_file_get_string(kf, "802-11-wireless", "ssid", NULL);
 
-    netdef_id = netplan_get_id_from_nm_filename(filename, ssid);
+    netdef_id = g_malloc0(strlen(filename));
+    netdef_id_size = netplan_get_id_from_nm_filepath(filename, ssid, netdef_id, strlen(filename));
     uuid = g_key_file_get_string(kf, "connection", "uuid", NULL);
     if (!uuid) {
         g_warning("netplan: Keyfile: cannot find connection.uuid");
@@ -477,7 +493,7 @@ netplan_parser_load_keyfile(NetplanParser* npp, const char* filename, GError** e
     tmp_str = g_key_file_get_string(kf, "connection", "interface-name", NULL);
     /* Use previously existing netdef IDs, if available, to override connections
      * Else: generate a "NM-<UUID>" ID */
-    if (netdef_id) {
+    if (netdef_id_size > 0) {
         nd_id = g_strdup(netdef_id);
         if (g_strcmp0(netdef_id, tmp_str) == 0)
             _kf_clear_key(kf, "connection", "interface-name");
@@ -491,10 +507,10 @@ netplan_parser_load_keyfile(NetplanParser* npp, const char* filename, GError** e
     nd = netplan_netdef_new(npp, nd_id, nd_type, NETPLAN_BACKEND_NM);
 
     /* Handle uuid & NM name/id */
-    nd->backend_settings.nm.uuid = g_strdup(uuid);
+    nd->backend_settings.uuid = g_strdup(uuid);
     _kf_clear_key(kf, "connection", "uuid");
-    nd->backend_settings.nm.name = g_key_file_get_string(kf, "connection", "id", NULL);
-    if (nd->backend_settings.nm.name)
+    nd->backend_settings.name = g_key_file_get_string(kf, "connection", "id", NULL);
+    if (nd->backend_settings.name)
         _kf_clear_key(kf, "connection", "id");
 
     if (nd_type == NETPLAN_DEF_TYPE_NM)
@@ -614,7 +630,9 @@ netplan_parser_load_keyfile(NetplanParser* npp, const char* filename, GError** e
     if (g_key_file_has_group(kf, "ethernet")) {
         /* wake-on-lan, do not clear passthrough as we do not fully support this setting */
         if (!g_key_file_has_key(kf, "ethernet", "wake-on-lan", NULL)) {
-            nd->wake_on_lan = TRUE; //NM's default is "1"
+            /* apply the default only to actual ethernet devices */
+            if (nd_type == NETPLAN_DEF_TYPE_ETHERNET)
+                nd->wake_on_lan = TRUE; //NM's default is "1"
         } else {
             guint value = g_key_file_get_uint64(kf, "ethernet", "wake-on-lan", NULL);
             //XXX: fix delta between options in NM (0x1, 0x2, 0x4, ...) and netplan (bool)
@@ -686,16 +704,16 @@ netplan_parser_load_keyfile(NetplanParser* npp, const char* filename, GError** e
     handle_generic_str(kf, "bond", "fail_over_mac", &nd->bond_params.fail_over_mac_policy);
     handle_generic_str(kf, "bond", "primary_reselect", &nd->bond_params.primary_reselect_policy);
     handle_generic_str(kf, "bond", "lp_interval", &nd->bond_params.learn_interval);
-    handle_generic_str(kf, "bond", "primary", &nd->bond_params.primary_slave);
+    handle_generic_str(kf, "bond", "primary", &nd->bond_params.primary_member);
     handle_generic_uint(kf, "bond", "min_links", &nd->bond_params.min_links, 0);
     handle_generic_uint(kf, "bond", "resend_igmp", &nd->bond_params.resend_igmp, 0);
-    handle_generic_uint(kf, "bond", "packets_per_slave", &nd->bond_params.packets_per_slave, 0);
+    handle_generic_uint(kf, "bond", "packets_per_slave", &nd->bond_params.packets_per_member, 0); /* wokeignore:rule=slave */
     handle_generic_uint(kf, "bond", "num_grat_arp", &nd->bond_params.gratuitous_arp, 0);
     /* num_unsol_na might overwrite num_grat_arp, but we're fine if they are equal:
      * https://github.com/NetworkManager/NetworkManager/commit/42b0bef33c77a0921590b2697f077e8ea7805166 */
     if (g_key_file_get_uint64(kf, "bond", "num_unsol_na", NULL) == nd->bond_params.gratuitous_arp)
         _kf_clear_key(kf, "bond", "num_unsol_na");
-    handle_generic_bool(kf, "bond", "all_slaves_active", &nd->bond_params.all_slaves_active);
+    handle_generic_bool(kf, "bond", "all_slaves_active", &nd->bond_params.all_members_active); /* wokeignore:rule=slave */
     parse_bond_arp_ip_targets(kf, &nd->bond_params.arp_ip_targets);
 
     /* Special handling for WiFi "access-points:" mapping */
@@ -704,6 +722,7 @@ netplan_parser_load_keyfile(NetplanParser* npp, const char* filename, GError** e
         ap->ssid = g_key_file_get_string(kf, "wifi", "ssid", NULL);
         if (!ap->ssid) {
             g_warning("netplan: Keyfile: cannot find SSID for WiFi connection");
+            g_free(ap);
             return FALSE;
         } else
             _kf_clear_key(kf, "wifi", "ssid");
@@ -768,15 +787,15 @@ netplan_parser_load_keyfile(NetplanParser* npp, const char* filename, GError** e
 
         /* Last: handle passthrough for everything left in the keyfile
          *       Also, transfer backend_settings from netdef to AP */
-        ap->backend_settings.nm.uuid = g_strdup(nd->backend_settings.nm.uuid);
-        ap->backend_settings.nm.name = g_strdup(nd->backend_settings.nm.name);
+        ap->backend_settings.uuid = g_strdup(nd->backend_settings.uuid);
+        ap->backend_settings.name = g_strdup(nd->backend_settings.name);
         /* No need to clear nm.uuid & nm.name from def->backend_settings,
          * as we have only one AP. */
-        read_passthrough(kf, &ap->backend_settings.nm.passthrough);
+        read_passthrough(kf, &ap->backend_settings.passthrough);
     } else {
 only_passthrough:
         /* Last: handle passthrough for everything left in the keyfile */
-        read_passthrough(kf, &nd->backend_settings.nm.passthrough);
+        read_passthrough(kf, &nd->backend_settings.passthrough);
     }
 
     g_key_file_free(kf);
@@ -784,7 +803,7 @@ only_passthrough:
     /* validate definition-level conditions */
     if (!npp->missing_id)
         npp->missing_id = g_hash_table_new_full(g_str_hash, g_str_equal, NULL, g_free);
-    if (!validate_netdef_grammar(npp, nd, NULL, error))
+    if (!validate_netdef_grammar(npp, nd, error))
         return FALSE;
     return TRUE;
 }

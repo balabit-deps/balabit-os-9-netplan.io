@@ -147,17 +147,12 @@ typedef struct ovs_settings {
     NetplanAuthenticationSettings ssl;
 } NetplanOVSSettings;
 
-typedef union {
-    struct NetplanNMSettings {
-        char *name;
-        char *uuid;
-        char *stable_id;
-        char *device;
-        GData* passthrough; /* See g_datalist* functions */
-    } nm;
-    struct NetplanNetworkdSettings {
-        char *unit;
-    } networkd;
+typedef struct netplan_backend_settings {
+    char *name;
+    char *uuid;
+    char *stable_id;
+    char *device;
+    GData* passthrough; /* See g_datalist* functions */
 } NetplanBackendSettings;
 
 typedef enum
@@ -224,12 +219,12 @@ struct netplan_net_definition {
         gboolean ipv6;
     } linklocal;
 
-    /* master ID for slave devices */
-    char* bridge;
-    char* bond;
+    /* primary ID for member devices */
+    char* bridge; // deprecated, use bridge_link instead
+    char* bond;   // deprecated, use bond_link instead
 
     /* peer ID for OVS patch ports */
-    char* peer;
+    char* peer;   // deprecated, use peer_link instead
 
     /* vlan */
     guint vlan_id;
@@ -268,7 +263,7 @@ struct netplan_net_definition {
         guint min_links;
         char* transmit_hash_policy;
         char* selection_logic;
-        gboolean all_slaves_active;
+        gboolean all_members_active;
         char* arp_interval;
         GArray* arp_ip_targets;
         char* arp_validate;
@@ -278,11 +273,11 @@ struct netplan_net_definition {
         char* fail_over_mac_policy;
         guint gratuitous_arp;
         /* TODO: unsolicited_na */
-        guint packets_per_slave;
+        guint packets_per_member;
         char* primary_reselect_policy;
         guint resend_igmp;
         char* learn_interval;
-        char* primary_slave;
+        char* primary_member;
     } bond_params;
 
     /* netplan-feature: modems */
@@ -327,7 +322,7 @@ struct netplan_net_definition {
 
     /* these properties are only valid for SR-IOV NICs */
     /* netplan-feature: sriov */
-    struct netplan_net_definition* sriov_link;
+    NetplanNetDefinition* sriov_link;
     gboolean sriov_vlan_filter;
     guint sriov_explicit_vf_count;
 
@@ -379,4 +374,11 @@ struct netplan_net_definition {
     /* netplan-feature: vxlan */
     gboolean has_vxlans;
     NetplanVxlan* vxlan;
+
+    NetplanNetDefinition* bridge_link;
+    NetplanNetDefinition* bond_link;
+    NetplanNetDefinition* peer_link;
+
+    /* True if "networkmanager" settings are present */
+    gboolean has_backend_settings_nm;
 };

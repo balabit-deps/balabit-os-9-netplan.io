@@ -34,6 +34,7 @@
 #include "nm.h"
 #include "openvswitch.h"
 #include "sriov.h"
+#include "netplan.h"
 
 static gchar* rootdir;
 static gchar** files;
@@ -199,7 +200,7 @@ exit_find:
 
 int main(int argc, char** argv)
 {
-    GError* error = NULL;
+    NetplanError* error = NULL;
     GOptionContext* opt_context;
     /* are we being called as systemd generator? */
     gboolean called_as_generator = (strstr(argv[0], "systemd/system-generators/") != NULL);
@@ -250,16 +251,20 @@ int main(int argc, char** argv)
     np_state = netplan_state_new();
     CHECK_CALL(netplan_state_import_parser_results(np_state, npp, &error));
 
+    if (mapping_iface) {
+        if (np_state->netdefs)
+            error_code = find_interface(mapping_iface, np_state->netdefs);
+        else
+            error_code = 1;
+
+        goto cleanup;
+    }
+
     /* Clean up generated config from previous runs */
     netplan_networkd_cleanup(rootdir);
     netplan_nm_cleanup(rootdir);
     netplan_ovs_cleanup(rootdir);
     netplan_sriov_cleanup(rootdir);
-
-    if (mapping_iface && np_state->netdefs) {
-        error_code = find_interface(mapping_iface, np_state->netdefs);
-        goto cleanup;
-    }
 
     /* Generate backend specific configuration files from merged data. */
     CHECK_CALL(netplan_state_finish_ovs_write(np_state, rootdir, &error)); // OVS cleanup unit is always written
@@ -319,8 +324,10 @@ int main(int argc, char** argv)
             start_unit_jit("systemd-networkd-wait-online.service");
             start_unit_jit("systemd-networkd.service");
         }
-        g_autofree char* glob_run = g_strjoin(NULL, rootdir ?: "", G_DIR_SEPARATOR_S,
-                                              "run/systemd/system/netplan-*.service", NULL);
+        g_autofree char* glob_run = g_build_path(G_DIR_SEPARATOR_S,
+                                                 rootdir ?: G_DIR_SEPARATOR_S,
+                                                 "run/systemd/system/netplan-*.service",
+                                                 NULL);
         if (!glob(glob_run, 0, NULL, &gl)) {
             for (size_t i = 0; i < gl.gl_pathc; ++i) {
                 gchar *unit_name = g_path_get_basename(gl.gl_pathv[i]);
@@ -332,6 +339,9 @@ int main(int argc, char** argv)
     }
 
 cleanup:
+    g_option_context_free(opt_context);
+    if (error)
+        g_error_free(error);
     if (npp)
         netplan_parser_clear(&npp);
     if (np_state)

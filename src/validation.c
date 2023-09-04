@@ -19,19 +19,20 @@
 #include <glib/gstdio.h>
 #include <gio/gio.h>
 #include <arpa/inet.h>
+#include <net/if.h>
 #include <regex.h>
 
 #include <yaml.h>
 
 #include "parse.h"
-#include "types.h"
+#include "types-internal.h"
 #include "parse-globals.h"
 #include "names.h"
 #include "error.h"
 #include "util-internal.h"
 #include "validation.h"
 
-/* Check sanity for address types */
+/* Check coherence for address types */
 
 gboolean
 is_ip4_address(const char* address)
@@ -79,7 +80,7 @@ is_wireguard_key(const char* key)
     return FALSE;
 }
 
-/* Check sanity of OpenVSwitch controller targets */
+/* Check coherence of OpenVSwitch controller targets */
 gboolean
 validate_ovs_target(gboolean host_first, gchar* s) {
     static guint dport = 6653; // the default port
@@ -151,6 +152,32 @@ validate_ovs_target(gboolean host_first, gchar* s) {
     return FALSE;
 }
 
+static gboolean
+validate_interface_name_length(const NetplanNetDefinition* netdef)
+{
+    gboolean validation = TRUE;
+    char* iface = NULL;
+
+    if (netdef->type >= NETPLAN_DEF_TYPE_VIRTUAL && netdef->type < NETPLAN_DEF_TYPE_NM) {
+        if (strnlen(netdef->id, IF_NAMESIZE) == IF_NAMESIZE) {
+            iface = netdef->id;
+            validation = FALSE;
+        }
+    } else if (netdef->set_name) {
+        if (strnlen(netdef->set_name, IF_NAMESIZE) == IF_NAMESIZE) {
+            iface = netdef->set_name;
+            validation = FALSE;
+        }
+    }
+
+    /* TODO: make this a hard failure in the future, but keep it as a warning
+     *       for now, to not break netplan generate at boot. */
+    if (iface)
+        g_warning("Interface name '%s' is too long. It will be ignored by the backend.", iface);
+
+    return validation;
+}
+
 /************************************************
  * Validation for grammar and backend rules.
  ************************************************/
@@ -191,7 +218,7 @@ validate_tunnel_grammar(const NetplanParser* npp, NetplanNetDefinition* nd, yaml
             if (peer->preshared_key && peer->preshared_key[0] != '/' && !is_wireguard_key(peer->preshared_key))
                 return yaml_error(npp, node, error, "%s: invalid wireguard shared key", nd->id);
             if (!peer->allowed_ips || peer->allowed_ips->len == 0)
-                return yaml_error(npp, node, error, "%s: 'to' is required to define the allowed IPs.", nd->id);
+                return yaml_error(npp, node, error, "%s: 'allowed-ips' is required for wireguard peers.", nd->id);
             if (peer->keepalive > 65535)
                 return yaml_error(npp, node, error, "%s: keepalive must be 0-65535 inclusive.", nd->id);
         }
@@ -309,10 +336,11 @@ validate_tunnel_backend_rules(const NetplanParser* npp, NetplanNetDefinition* nd
 }
 
 gboolean
-validate_netdef_grammar(const NetplanParser* npp, NetplanNetDefinition* nd, yaml_node_t* node, GError** error)
+validate_netdef_grammar(const NetplanParser* npp, NetplanNetDefinition* nd, GError** error)
 {
     int missing_id_count = g_hash_table_size(npp->missing_id);
     gboolean valid = FALSE;
+    NetplanBackend backend = nd->backend;
 
     g_assert(nd->type != NETPLAN_DEF_TYPE_NONE);
 
@@ -324,59 +352,69 @@ validate_netdef_grammar(const NetplanParser* npp, NetplanNetDefinition* nd, yaml
 
     /* set-name: requires match: */
     if (nd->set_name && !nd->has_match)
-        return yaml_error(npp, node, error, "%s: 'set-name:' requires 'match:' properties", nd->id);
+        return yaml_error(npp, NULL, error, "%s: 'set-name:' requires 'match:' properties", nd->id);
 
     if (nd->type == NETPLAN_DEF_TYPE_WIFI && nd->access_points == NULL)
-        return yaml_error(npp, node, error, "%s: No access points defined", nd->id);
+        return yaml_error(npp, NULL, error, "%s: No access points defined", nd->id);
 
     if (nd->type == NETPLAN_DEF_TYPE_VLAN) {
         if (!nd->vlan_link)
-            return yaml_error(npp, node, error, "%s: missing 'link' property", nd->id);
+            return yaml_error(npp, NULL, error, "%s: missing 'link' property", nd->id);
         nd->vlan_link->has_vlans = TRUE;
         if (nd->vlan_id == G_MAXUINT)
-            return yaml_error(npp, node, error, "%s: missing 'id' property", nd->id);
+            return yaml_error(npp, NULL, error, "%s: missing 'id' property", nd->id);
         if (nd->vlan_id > 4094)
-            return yaml_error(npp, node, error, "%s: invalid id '%u' (allowed values are 0 to 4094)", nd->id, nd->vlan_id);
+            return yaml_error(npp, NULL, error, "%s: invalid id '%u' (allowed values are 0 to 4094)", nd->id, nd->vlan_id);
     }
 
     if (nd->type == NETPLAN_DEF_TYPE_TUNNEL &&
         nd->tunnel.mode == NETPLAN_TUNNEL_MODE_VXLAN) {
         if (nd->vxlan->vni == 0)
-            return yaml_error(npp, node, error,
+            return yaml_error(npp, NULL, error,
                               "%s: missing 'id' property (VXLAN VNI)", nd->id);
         if (nd->vxlan->vni < 1 || nd->vxlan->vni > 16777215)
-            return yaml_error(npp, node, error, "%s: VXLAN 'id' (VNI) "
+            return yaml_error(npp, NULL, error, "%s: VXLAN 'id' (VNI) "
                               "must be in range [1..16777215]", nd->id);
         if (nd->vxlan->flow_label != G_MAXUINT && nd->vxlan->flow_label > 1048575)
-            return yaml_error(npp, node, error, "%s: VXLAN 'flow-label' "
+            return yaml_error(npp, NULL, error, "%s: VXLAN 'flow-label' "
                               "must be in range [0..1048575]", nd->id);
     }
 
     if (nd->type == NETPLAN_DEF_TYPE_VRF) {
         if (nd->vrf_table == G_MAXUINT)
-            return yaml_error(npp, node, error, "%s: missing 'table' property", nd->id);
+            return yaml_error(npp, NULL, error, "%s: missing 'table' property", nd->id);
     }
 
     if (nd->type == NETPLAN_DEF_TYPE_TUNNEL) {
-        valid = validate_tunnel_grammar(npp, nd, node, error);
+        valid = validate_tunnel_grammar(npp, nd, NULL, error);
         if (!valid)
             goto netdef_grammar_error;
     }
 
     if (nd->ip6_addr_gen_mode != NETPLAN_ADDRGEN_DEFAULT && nd->ip6_addr_gen_token)
-        return yaml_error(npp, node, error, "%s: ipv6-address-generation and ipv6-address-token are mutually exclusive", nd->id);
+        return yaml_error(npp, NULL, error, "%s: ipv6-address-generation and ipv6-address-token are mutually exclusive", nd->id);
 
     if (nd->backend == NETPLAN_BACKEND_OVS) {
         // LCOV_EXCL_START
         if (!g_file_test(OPENVSWITCH_OVS_VSCTL, G_FILE_TEST_EXISTS)) {
             /* Tested via integration test */
-            return yaml_error(npp, node, error, "%s: The 'ovs-vsctl' tool is required to setup OpenVSwitch interfaces.", nd->id);
+            return yaml_error(npp, NULL, error, "%s: The 'ovs-vsctl' tool is required to setup OpenVSwitch interfaces.", nd->id);
         }
         // LCOV_EXCL_STOP
     }
 
-    if (nd->type == NETPLAN_DEF_TYPE_NM && (!nd->backend_settings.nm.passthrough || !g_datalist_get_data(&nd->backend_settings.nm.passthrough, "connection.type")))
-        return yaml_error(npp, node, error, "%s: network type 'nm-devices:' needs to provide a 'connection.type' via passthrough", nd->id);
+    if (nd->type == NETPLAN_DEF_TYPE_NM && (!nd->backend_settings.passthrough || !g_datalist_get_data(&nd->backend_settings.passthrough, "connection.type")))
+        return yaml_error(npp, NULL, error, "%s: network type 'nm-devices:' needs to provide a 'connection.type' via passthrough", nd->id);
+
+    if (npp->current.netdef)
+        validate_interface_name_length(npp->current.netdef);
+
+    if (backend == NETPLAN_BACKEND_NONE)
+        backend = npp->global_backend;
+
+    if (nd->has_backend_settings_nm && backend != NETPLAN_BACKEND_NM) {
+            return yaml_error(npp, NULL, error, "%s: networkmanager backend settings found but renderer is not NetworkManager.", nd->id);
+    }
 
     valid = TRUE;
 
@@ -388,7 +426,7 @@ gboolean
 validate_backend_rules(const NetplanParser* npp, NetplanNetDefinition* nd, GError** error)
 {
     gboolean valid = FALSE;
-    /* Set a dummy, NULL yaml_node_t for error reporting */
+    /* Set a placeholder, NULL yaml_node_t for error reporting */
     yaml_node_t* node = NULL;
 
     g_assert(nd->type != NETPLAN_DEF_TYPE_NONE);
@@ -414,7 +452,7 @@ validate_sriov_rules(const NetplanParser* npp, NetplanNetDefinition* nd, GError*
     NetplanNetDefinition* def;
     GHashTableIter iter;
     gboolean valid = FALSE;
-    /* Set a dummy, NULL yaml_node_t for error reporting */
+    /* Set a placeholder, NULL yaml_node_t for error reporting */
     yaml_node_t* node = NULL;
 
     g_assert(nd->type != NETPLAN_DEF_TYPE_NONE);
@@ -455,40 +493,46 @@ adopt_and_validate_vrf_routes(const NetplanParser *npp, GHashTable *netdefs, GEr
     while (g_hash_table_iter_next (&iter, &key, &value))
     {
         NetplanNetDefinition *nd = value;
-        if (nd->type != NETPLAN_DEF_TYPE_VRF || !nd->routes)
+        if (nd->type != NETPLAN_DEF_TYPE_VRF)
             continue;
 
         /* Routes */
-        for (size_t i = 0; i < nd->routes->len; i++) {
-            NetplanIPRoute* r = g_array_index(nd->routes, NetplanIPRoute*, i);
-            if (r->table == nd->vrf_table) {
-                g_debug("%s: Ignoring redundant routes table %d (matches VRF table)", nd->id, r->table);
-                continue;
-            } else if (r->table != NETPLAN_ROUTE_TABLE_UNSPEC) {
-                g_set_error(error, G_MARKUP_ERROR, G_MARKUP_ERROR_INVALID_CONTENT,
+        if (nd->routes) {
+            for (size_t i = 0; i < nd->routes->len; i++) {
+                NetplanIPRoute* r = g_array_index(nd->routes, NetplanIPRoute*, i);
+                if (r->table == nd->vrf_table) {
+                    g_debug("%s: Ignoring redundant routes table %d (matches VRF table)", nd->id, r->table);
+                    continue;
+                } else if (r->table != NETPLAN_ROUTE_TABLE_UNSPEC) {
+                    g_set_error(error, G_MARKUP_ERROR, G_MARKUP_ERROR_INVALID_CONTENT,
                             "%s: VRF routes table mismatch (%d != %d)", nd->id, nd->vrf_table, r->table);
-                return FALSE;
-            } else {
-                r->table = nd->vrf_table;
-                g_debug("%s: Adopted VRF routes table to %d", nd->id, nd->vrf_table);
+                    return FALSE;
+                } else {
+                    r->table = nd->vrf_table;
+                    g_debug("%s: Adopted VRF routes table to %d", nd->id, nd->vrf_table);
+                }
             }
         }
+
         /* IP Rules */
-        for (size_t i = 0; i < nd->ip_rules->len; i++) {
-            NetplanIPRule* r = g_array_index(nd->ip_rules, NetplanIPRule*, i);
-            if (r->table == nd->vrf_table) {
-                g_debug("%s: Ignoring redundant routing-policy table %d (matches VRF table)", nd->id, r->table);
-                continue;
-            } else if (r->table != NETPLAN_ROUTE_TABLE_UNSPEC && r->table != nd->vrf_table) {
-                g_set_error(error, G_MARKUP_ERROR, G_MARKUP_ERROR_INVALID_CONTENT,
+        if (nd->ip_rules) {
+            for (size_t i = 0; i < nd->ip_rules->len; i++) {
+                NetplanIPRule* r = g_array_index(nd->ip_rules, NetplanIPRule*, i);
+                if (r->table == nd->vrf_table) {
+                    g_debug("%s: Ignoring redundant routing-policy table %d (matches VRF table)", nd->id, r->table);
+                    continue;
+                } else if (r->table != NETPLAN_ROUTE_TABLE_UNSPEC && r->table != nd->vrf_table) {
+                    g_set_error(error, G_MARKUP_ERROR, G_MARKUP_ERROR_INVALID_CONTENT,
                             "%s: VRF routing-policy table mismatch (%d != %d)", nd->id, nd->vrf_table, r->table);
-                return FALSE;
-            } else {
-                r->table = nd->vrf_table;
-                g_debug("%s: Adopted VRF routing-policy table to %d", nd->id, nd->vrf_table);
+                    return FALSE;
+                } else {
+                    r->table = nd->vrf_table;
+                    g_debug("%s: Adopted VRF routing-policy table to %d", nd->id, nd->vrf_table);
+                }
             }
         }
     }
+
     return TRUE;
 }
 

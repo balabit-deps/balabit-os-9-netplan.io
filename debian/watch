@@ -1,4 +1,4 @@
 version=4
 
 opts=filenamemangle=s/.+\/v?@ANY_VERSION@@ARCHIVE_EXT@/@PACKAGE@-$1.tar.gz/,uversionmangle=s/-?rc/~rc/  \
-  https://github.com/canonical/netplan/releases .*/v?@ANY_VERSION@@ARCHIVE_EXT@
+  https://github.com/canonical/netplan/tags .*/v?@ANY_VERSION@@ARCHIVE_EXT@

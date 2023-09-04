@@ -35,6 +35,7 @@ Name=eth0 en*
 
 [Network]
 DHCP=yes
+KeepConfiguration=yes
 EOF
 
 case "${AUTOPKGTEST_REBOOT_MARK:-}" in
@@ -58,6 +59,7 @@ network:
   version: 2
   bridges:
     brtest00:
+      optional: true # ignore in systemd-networkd-wait-online.service to avoid testbed timeouts
       addresses: [10.42.1.1/24]
 EOF
 

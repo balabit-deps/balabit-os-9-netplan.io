@@ -1,7 +1,7 @@
-Test-Command: systemctl is-active openvswitch-switch.service && python3 tests/integration/run.py --test=ovs || exit 77
+Test-Command: systemctl is-active openvswitch-switch.service && ./debian/tests/prep-testbed.sh && python3 tests/integration/run.py --test=ovs || exit 77
 Tests-Directory: tests/integration
 Depends: @,
-  systemd,
+  systemd-resolved | systemd (<< 251.3-2~),
   network-manager,
   hostapd,
   wpasupplicant,
@@ -13,10 +13,10 @@ Depends: @,
 Restrictions: allow-stderr, needs-root, isolation-container, skip-not-installable, skippable
 Features: test-name=ovs
 
-Test-Command: python3 tests/integration/run.py --test=ethernets
+Test-Command: ./debian/tests/prep-testbed.sh && python3 tests/integration/run.py --test=ethernets
 Tests-Directory: tests/integration
 Depends: @,
-  systemd,
+  systemd-resolved | systemd (<< 251.3-2~),
   network-manager,
   hostapd,
   wpasupplicant,
@@ -28,10 +28,10 @@ Depends: @,
 Restrictions: allow-stderr, needs-root, isolation-container
 Features: test-name=ethernets
 
-Test-Command: python3 tests/integration/run.py --test=bridges
+Test-Command: ./debian/tests/prep-testbed.sh && python3 tests/integration/run.py --test=bridges
 Tests-Directory: tests/integration
 Depends: @,
-  systemd,
+  systemd-resolved | systemd (<< 251.3-2~),
   network-manager,
   hostapd,
   wpasupplicant,
@@ -42,10 +42,10 @@ Depends: @,
 Restrictions: allow-stderr, needs-root, isolation-container
 Features: test-name=bridges
 
-Test-Command: python3 tests/integration/run.py --test=bonds
+Test-Command: ./debian/tests/prep-testbed.sh && python3 tests/integration/run.py --test=bonds
 Tests-Directory: tests/integration
 Depends: @,
-  systemd,
+  systemd-resolved | systemd (<< 251.3-2~),
   network-manager,
   hostapd,
   wpasupplicant,
@@ -56,10 +56,10 @@ Depends: @,
 Restrictions: allow-stderr, needs-root, isolation-container
 Features: test-name=bonds
 
-Test-Command: python3 tests/integration/run.py --test=routing
+Test-Command: ./debian/tests/prep-testbed.sh && python3 tests/integration/run.py --test=routing
 Tests-Directory: tests/integration
 Depends: @,
-  systemd,
+  systemd-resolved | systemd (<< 251.3-2~),
   network-manager,
   hostapd,
   wpasupplicant,
@@ -70,10 +70,10 @@ Depends: @,
 Restrictions: allow-stderr, needs-root, isolation-container
 Features: test-name=routing
 
-Test-Command: python3 tests/integration/run.py --test=vlans
+Test-Command: ./debian/tests/prep-testbed.sh && python3 tests/integration/run.py --test=vlans
 Tests-Directory: tests/integration
 Depends: @,
-  systemd,
+  systemd-resolved | systemd (<< 251.3-2~),
   network-manager,
   hostapd,
   wpasupplicant,
@@ -84,10 +84,10 @@ Depends: @,
 Restrictions: allow-stderr, needs-root, isolation-container
 Features: test-name=vlans
 
-Test-Command: python3 tests/integration/run.py --test=wifi
+Test-Command: ./debian/tests/prep-testbed.sh && python3 tests/integration/run.py --test=wifi
 Tests-Directory: tests/integration
 Depends: @,
-  systemd,
+  systemd-resolved | systemd (<< 251.3-2~),
   network-manager,
   hostapd,
   wpasupplicant,
@@ -99,10 +99,10 @@ Depends: @,
 Restrictions: allow-stderr, needs-root, isolation-container, flaky
 Features: test-name=wifi
 
-Test-Command: python3 tests/integration/run.py --test=tunnels
+Test-Command: ./debian/tests/prep-testbed.sh && python3 tests/integration/run.py --test=tunnels
 Tests-Directory: tests/integration
 Depends: @,
-  systemd,
+  systemd-resolved | systemd (<< 251.3-2~),
   network-manager,
   hostapd,
   wpasupplicant,
@@ -114,10 +114,10 @@ Depends: @,
 Restrictions: allow-stderr, needs-root, isolation-container
 Features: test-name=tunnels
 
-Test-Command: python3 tests/integration/run.py --test=scenarios
+Test-Command: ./debian/tests/prep-testbed.sh && python3 tests/integration/run.py --test=scenarios
 Tests-Directory: tests/integration
 Depends: @,
-  systemd,
+  systemd-resolved | systemd (<< 251.3-2~),
   network-manager,
   hostapd,
   wpasupplicant,
@@ -128,10 +128,10 @@ Depends: @,
 Restrictions: allow-stderr, needs-root, isolation-container
 Features: test-name=scenarios
 
-Test-Command: python3 tests/integration/run.py --test=regressions
+Test-Command: ./debian/tests/prep-testbed.sh && python3 tests/integration/run.py --test=regressions
 Tests-Directory: tests/integration
 Depends: @,
-  systemd,
+  systemd-resolved | systemd (<< 251.3-2~),
   network-manager,
   hostapd,
   wpasupplicant,
@@ -142,8 +142,30 @@ Depends: @,
 Restrictions: allow-stderr, needs-root, isolation-container
 Features: test-name=regressions
 
-Tests: autostart.sh
+Test-Command: ./debian/tests/prep-testbed.sh && python3 tests/integration/run.py --test=dbus
+Tests-Directory: tests/integration
+Depends: @,
+  systemd-resolved | systemd (<< 251.3-2~),
+  network-manager,
+  hostapd,
+  wpasupplicant,
+  dnsmasq-base,
+  libnm0,
+  python3-gi,
+  gir1.2-nm-1.0,
 Restrictions: allow-stderr, needs-root, isolation-container
+Features: test-name=dbus
 
-Tests: cloud-init.sh
+Test-Command: ./debian/tests/prep-testbed.sh && ./debian/tests/autostart.sh
+Depends: @,
+  systemd-resolved | systemd (<< 251.3-2~),
+  udev
 Restrictions: allow-stderr, needs-root, isolation-container
+Features: test-name=autostart
+
+Test-Command: ./debian/tests/prep-testbed.sh && ./debian/tests/cloud-init.sh
+Depends: @,
+  systemd-resolved | systemd (<< 251.3-2~),
+  udev
+Restrictions: allow-stderr, needs-root, isolation-container
+Features: test-name=cloud-init

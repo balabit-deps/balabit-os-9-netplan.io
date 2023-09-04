@@ -21,6 +21,7 @@
 #include <unistd.h>
 #include <sys/stat.h>
 #include <arpa/inet.h>
+#include <net/if.h>
 
 #include <glib.h>
 #include <glib/gprintf.h>
@@ -93,8 +94,8 @@ type_str(const NetplanNetDefinition* def)
             return "ip-tunnel";
         case NETPLAN_DEF_TYPE_NM:
             /* needs to be overriden by passthrough "connection.type" setting */
-            g_assert(def->backend_settings.nm.passthrough);
-            GData *passthrough = def->backend_settings.nm.passthrough;
+            g_assert(def->backend_settings.passthrough);
+            GData *passthrough = def->backend_settings.passthrough;
             return g_datalist_get_data(&passthrough, "connection.type");
         // LCOV_EXCL_START
         default:
@@ -266,8 +267,8 @@ write_bond_parameters(const NetplanNetDefinition* def, GKeyFile *kf)
         g_key_file_set_string(kf, "bond", "xmit_hash_policy", def->bond_params.transmit_hash_policy);
     if (def->bond_params.selection_logic)
         g_key_file_set_string(kf, "bond", "ad_select", def->bond_params.selection_logic);
-    if (def->bond_params.all_slaves_active)
-        g_key_file_set_integer(kf, "bond", "all_slaves_active", def->bond_params.all_slaves_active);
+    if (def->bond_params.all_members_active)
+        g_key_file_set_integer(kf, "bond", "all_slaves_active", def->bond_params.all_members_active); /* wokeignore:rule=slave */
     if (def->bond_params.arp_interval)
         g_key_file_set_string(kf, "bond", "arp_interval", def->bond_params.arp_interval);
     if (def->bond_params.arp_ip_targets) {
@@ -296,16 +297,16 @@ write_bond_parameters(const NetplanNetDefinition* def, GKeyFile *kf)
          * https://github.com/NetworkManager/NetworkManager/commit/42b0bef33c77a0921590b2697f077e8ea7805166 */
         g_key_file_set_integer(kf, "bond", "num_unsol_na", def->bond_params.gratuitous_arp);
     }
-    if (def->bond_params.packets_per_slave)
-        g_key_file_set_integer(kf, "bond", "packets_per_slave", def->bond_params.packets_per_slave);
+    if (def->bond_params.packets_per_member)
+        g_key_file_set_integer(kf, "bond", "packets_per_slave", def->bond_params.packets_per_member); /* wokeignore:rule=slave */
     if (def->bond_params.primary_reselect_policy)
         g_key_file_set_string(kf, "bond", "primary_reselect", def->bond_params.primary_reselect_policy);
     if (def->bond_params.resend_igmp)
         g_key_file_set_integer(kf, "bond", "resend_igmp", def->bond_params.resend_igmp);
     if (def->bond_params.learn_interval)
         g_key_file_set_string(kf, "bond", "lp_interval", def->bond_params.learn_interval);
-    if (def->bond_params.primary_slave)
-        g_key_file_set_string(kf, "bond", "primary", def->bond_params.primary_slave);
+    if (def->bond_params.primary_member)
+        g_key_file_set_string(kf, "bond", "primary", def->bond_params.primary_member);
 }
 
 static void
@@ -329,7 +330,6 @@ write_bridge_params(const NetplanNetDefinition* def, GKeyFile *kf)
 static gboolean
 write_wireguard_params(const NetplanNetDefinition* def, GKeyFile *kf, GError** error)
 {
-    gchar* tmp_group = NULL;
     g_assert(def->tunnel.private_key);
 
     /* The key was already validated via validate_tunnel_grammar(), but we need
@@ -350,7 +350,7 @@ write_wireguard_params(const NetplanNetDefinition* def, GKeyFile *kf, GError** e
     for (guint i = 0; i < def->wireguard_peers->len; i++) {
         NetplanWireguardPeer *peer = g_array_index (def->wireguard_peers, NetplanWireguardPeer*, i);
         g_assert(peer->public_key);
-        tmp_group = g_strdup_printf("wireguard-peer.%s", peer->public_key);
+        g_autofree gchar* tmp_group = g_strdup_printf("wireguard-peer.%s", peer->public_key);
 
         if (peer->keepalive)
             g_key_file_set_integer(kf, tmp_group, "persistent-keepalive", peer->keepalive);
@@ -376,7 +376,6 @@ write_wireguard_params(const NetplanNetDefinition* def, GKeyFile *kf, GError** e
                 list[j] = g_array_index(peer->allowed_ips, char*, j);
             g_key_file_set_string_list(kf, tmp_group, "allowed-ips", list, peer->allowed_ips->len);
         }
-        g_free(tmp_group);
     }
     return TRUE;
 }
@@ -471,7 +470,7 @@ write_vxlan_parameters(const NetplanNetDefinition* def, GKeyFile* kf)
         g_key_file_set_uint64(kf, "vxlan", "destination-port", def->tunnel.port);
     if (def->vxlan->vni)
         g_key_file_set_uint64(kf, "vxlan", "id", def->vxlan->vni);
-    if (def->vxlan->mac_learning)
+    if (def->vxlan->mac_learning != NETPLAN_TRISTATE_UNSET)
         g_key_file_set_boolean(kf, "vxlan", "learning", def->vxlan->mac_learning);
     if (def->vxlan->limit)
         g_key_file_set_uint64(kf, "vxlan", "limit", def->vxlan->limit);
@@ -479,7 +478,7 @@ write_vxlan_parameters(const NetplanNetDefinition* def, GKeyFile* kf)
         g_key_file_set_string(kf, "vxlan", "local", def->tunnel.local_ip);
     if (def->tunnel.remote_ip)
         g_key_file_set_string(kf, "vxlan", "remote", def->tunnel.remote_ip);
-    if (def->vxlan->arp_proxy)
+    if (def->vxlan->arp_proxy != NETPLAN_TRISTATE_UNSET)
         g_key_file_set_boolean(kf, "vxlan", "proxy", def->vxlan->arp_proxy);
     if (def->vxlan->notifications) {
         if (def->vxlan->notifications & NETPLAN_VXLAN_NOTIFICATION_L2_MISS)
@@ -495,7 +494,7 @@ write_vxlan_parameters(const NetplanNetDefinition* def, GKeyFile* kf)
         g_key_file_set_uint64(kf, "vxlan", "tos", def->vxlan->tos);
     if (def->tunnel_ttl)
         g_key_file_set_uint64(kf, "vxlan", "ttl", def->tunnel_ttl);
-    if (def->vxlan->short_circuit)
+    if (def->vxlan->short_circuit != NETPLAN_TRISTATE_UNSET)
         g_key_file_set_boolean(kf, "vxlan", "rsc", def->vxlan->short_circuit);
     if (def->vxlan->link) {
         if (def->vxlan->link->has_match) {
@@ -516,7 +515,7 @@ write_vxlan_parameters(const NetplanNetDefinition* def, GKeyFile* kf)
 
 /**
  * Special handling for passthrough mode: read key-value pairs from
- * "backend_settings.nm.passthrough" and inject them into the keyfile as-is.
+ * "backend_settings.passthrough" and inject them into the keyfile as-is.
  */
 static void
 write_fallback_key_value(GQuark key_id, gpointer value, gpointer user_data)
@@ -546,7 +545,7 @@ write_fallback_key_value(GQuark key_id, gpointer value, gpointer user_data)
     has_key = g_key_file_has_key(kf, group, k, NULL);
     old_key = g_key_file_get_string(kf, group, k, NULL);
     g_key_file_set_string(kf, group, k, val);
-    /* delete the dummy key, if this was just an empty group */
+    /* delete the placeholder key, if this was just an empty group */
     if (!g_strcmp0(k, NETPLAN_NM_EMPTY_GROUP))
         g_key_file_remove_key(kf, group, k, NULL);
     /* handle differing defaults:
@@ -599,10 +598,10 @@ write_nm_conf_access_point(const NetplanNetDefinition* def, const char* rootdir,
     }
 
     kf = g_key_file_new();
-    if (ap && ap->backend_settings.nm.name)
-        g_key_file_set_string(kf, "connection", "id", ap->backend_settings.nm.name);
-    else if (def->backend_settings.nm.name)
-        g_key_file_set_string(kf, "connection", "id", def->backend_settings.nm.name);
+    if (ap && ap->backend_settings.name)
+        g_key_file_set_string(kf, "connection", "id", ap->backend_settings.name);
+    else if (def->backend_settings.name)
+        g_key_file_set_string(kf, "connection", "id", def->backend_settings.name);
     else {
         /* Auto-generate a name for the connection profile, if not specified */
         if (ap)
@@ -616,10 +615,10 @@ write_nm_conf_access_point(const NetplanNetDefinition* def, const char* rootdir,
     if (nm_type && def->type != NETPLAN_DEF_TYPE_NM)
         g_key_file_set_string(kf, "connection", "type", nm_type);
 
-    if (ap && ap->backend_settings.nm.uuid)
-        g_key_file_set_string(kf, "connection", "uuid", ap->backend_settings.nm.uuid);
-    else if (def->backend_settings.nm.uuid)
-        g_key_file_set_string(kf, "connection", "uuid", def->backend_settings.nm.uuid);
+    if (ap && ap->backend_settings.uuid)
+        g_key_file_set_string(kf, "connection", "uuid", ap->backend_settings.uuid);
+    else if (def->backend_settings.uuid)
+        g_key_file_set_string(kf, "connection", "uuid", def->backend_settings.uuid);
     /* VLAN/VXLAN devices refer to us as their parent; if our ID is not a name
      * but we have matches, parent= must be the connection UUID, so put it into
      * the connection */
@@ -657,8 +656,8 @@ write_nm_conf_access_point(const NetplanNetDefinition* def, const char* rootdir,
         /* else matches on something other than the name, do not restrict interface-name */
     } else {
         /* virtual (created) devices set a name */
-        if (strlen(def->id) > 15)
-            g_debug("interface-name longer than 15 characters is not supported");
+        if (strnlen(def->id, IF_NAMESIZE) == IF_NAMESIZE)
+            g_debug("interface-name %s is too long. Ignoring.", def->id);
         else
             g_key_file_set_string(kf, "connection", "interface-name", def->id);
 
@@ -666,8 +665,8 @@ write_nm_conf_access_point(const NetplanNetDefinition* def, const char* rootdir,
             write_bridge_params(def, kf);
         if (def->type == NETPLAN_DEF_TYPE_VRF) {
             g_key_file_set_uint64(kf, "vrf", "table", def->vrf_table);
-            write_routes(def, kf, AF_INET, error);
-            write_routes(def, kf, AF_INET6, error);
+            if (!write_routes(def, kf, AF_INET, error) || !write_routes(def, kf, AF_INET6, error))
+                return FALSE;
         }
     }
     if (def->type == NETPLAN_DEF_TYPE_MODEM) {
@@ -702,8 +701,8 @@ write_nm_conf_access_point(const NetplanNetDefinition* def, const char* rootdir,
             g_key_file_set_string(kf, modem_type, "sim-operator-id", def->modem_params.sim_operator_id);
     }
     if (def->bridge) {
-        g_key_file_set_string(kf, "connection", "slave-type", "bridge");
-        g_key_file_set_string(kf, "connection", "master", def->bridge);
+        g_key_file_set_string(kf, "connection", "slave-type", "bridge"); /* wokeignore:rule=slave */
+        g_key_file_set_string(kf, "connection", "master", def->bridge); /* wokeignore:rule=master */
 
         if (def->bridge_params.path_cost)
             g_key_file_set_uint64(kf, "bridge-port", "path-cost", def->bridge_params.path_cost);
@@ -711,13 +710,13 @@ write_nm_conf_access_point(const NetplanNetDefinition* def, const char* rootdir,
             g_key_file_set_uint64(kf, "bridge-port", "priority", def->bridge_params.port_priority);
     }
     if (def->bond) {
-        g_key_file_set_string(kf, "connection", "slave-type", "bond");
-        g_key_file_set_string(kf, "connection", "master", def->bond);
+        g_key_file_set_string(kf, "connection", "slave-type", "bond"); /* wokeignore:rule=slave */
+        g_key_file_set_string(kf, "connection", "master", def->bond); /* wokeignore:rule=master */
     }
 
     if (def->vrf_link) {
-        g_key_file_set_string(kf, "connection", "slave-type", "vrf");
-        g_key_file_set_string(kf, "connection", "master", def->vrf_link->id);
+        g_key_file_set_string(kf, "connection", "slave-type", "vrf"); /* wokeignore:rule=slave */
+        g_key_file_set_string(kf, "connection", "master", def->vrf_link->id); /* wokeignore:rule=master */
     }
 
     if (def->ipv6_mtubytes) {
@@ -874,15 +873,16 @@ write_nm_conf_access_point(const NetplanNetDefinition* def, const char* rootdir,
     else
         g_key_file_set_string(kf, "ipv6", "method", "ignore");
 
-    if (def->backend_settings.nm.passthrough) {
+    if (def->backend_settings.passthrough) {
         g_debug("NetworkManager: using keyfile passthrough mode");
         /* Write all key-value pairs from the hashtable into the keyfile,
          * potentially overriding existing values, if not fully supported. */
-        g_datalist_foreach((GData**)&def->backend_settings.nm.passthrough, write_fallback_key_value, kf);
+        g_datalist_foreach((GData**)&def->backend_settings.passthrough, write_fallback_key_value, kf);
     }
 
     if (ap) {
         g_autofree char* escaped_ssid = g_uri_escape_string(ap->ssid, NULL, TRUE);
+        /* TODO: make use of netplan_netdef_get_output_filename() */
         conf_path = g_strjoin(NULL, "run/NetworkManager/system-connections/netplan-", def->id, "-", escaped_ssid, ".nmconnection", NULL);
 
         g_key_file_set_string(kf, "wifi", "ssid", ap->ssid);
@@ -907,16 +907,17 @@ write_nm_conf_access_point(const NetplanNetDefinition* def, const char* rootdir,
         if (ap->has_auth) {
             write_wifi_auth_parameters(&ap->auth, kf);
         }
-        if (ap->backend_settings.nm.passthrough) {
+        if (ap->backend_settings.passthrough) {
             g_debug("NetworkManager: using AP keyfile passthrough mode");
             /* Write all key-value pairs from the hashtable into the keyfile,
              * potentially overriding existing values, if not fully supported.
              * AP passthrough values have higher priority than ND passthrough,
              * because they are more specific and bound to the current SSID's
              * NM connection profile. */
-            g_datalist_foreach((GData**)&ap->backend_settings.nm.passthrough, write_fallback_key_value, kf);
+            g_datalist_foreach((GData**)&ap->backend_settings.passthrough, write_fallback_key_value, kf);
         }
     } else {
+        /* TODO: make use of netplan_netdef_get_output_filename() */
         conf_path = g_strjoin(NULL, "run/NetworkManager/system-connections/netplan-", def->id, ".nmconnection", NULL);
         if (def->has_auth) {
             write_dot1x_auth_parameters(&def->auth, kf);

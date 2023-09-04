@@ -878,8 +878,8 @@ method=ignore
 id=netplan-eth1
 type=ethernet
 interface-name=eth1
-slave-type=bond
-master=bond0
+slave-type=bond # wokeignore:rule=slave
+master=bond0 # wokeignore:rule=master
 
 [ethernet]
 wake-on-lan=0
@@ -1369,34 +1369,30 @@ ConfigureWithoutCarrier=yes
 Bridge=br0
 ''',
                               'eth0.link': '''[Match]
-MACAddress=00:01:02:03:04:05
-Type=!vlan bond bridge
+PermanentMACAddress=00:01:02:03:04:05
 
 [Link]
 Name=eth0
 WakeOnLan=off
 ''',
                               'eth0.network': '''[Match]
-MACAddress=00:01:02:03:04:05
+PermanentMACAddress=00:01:02:03:04:05
 Name=eth0
-Type=!vlan bond bridge
 
 [Network]
 LinkLocalAddressing=no
 Bond=bond0
 ''',
                               'eth1.link': '''[Match]
-MACAddress=02:01:02:03:04:05
-Type=!vlan bond bridge
+PermanentMACAddress=02:01:02:03:04:05
 
 [Link]
 Name=eth1
 WakeOnLan=off
 ''',
                               'eth1.network': '''[Match]
-MACAddress=02:01:02:03:04:05
+PermanentMACAddress=02:01:02:03:04:05
 Name=eth1
-Type=!vlan bond bridge
 
 [Network]
 LinkLocalAddressing=no
@@ -1491,39 +1487,75 @@ ConfigureWithoutCarrier=yes
 Bond=bond0
 ''',
                               'eth0.link': '''[Match]
-MACAddress=00:01:02:03:04:05
-Type=!vlan bond bridge
+PermanentMACAddress=00:01:02:03:04:05
 
 [Link]
 Name=eth0
 WakeOnLan=off
 ''',
                               'eth0.network': '''[Match]
-MACAddress=00:01:02:03:04:05
+PermanentMACAddress=00:01:02:03:04:05
 Name=eth0
-Type=!vlan bond bridge
 
 [Network]
 LinkLocalAddressing=no
 Bond=bond0
 ''',
                               'eth1.link': '''[Match]
-MACAddress=02:01:02:03:04:05
-Type=!vlan bond bridge
+PermanentMACAddress=02:01:02:03:04:05
 
 [Link]
 Name=eth1
 WakeOnLan=off
 ''',
                               'eth1.network': '''[Match]
-MACAddress=02:01:02:03:04:05
+PermanentMACAddress=02:01:02:03:04:05
 Name=eth1
-Type=!vlan bond bridge
 
 [Network]
 LinkLocalAddressing=no
 Bridge=br1
 '''})
+
+    def test_fwdecl_will_not_lead_to_duplicates(self):
+        '''
+        When the parser needs more than one pass we shouldn't
+        emit duplicated configuration
+        Testcase for LP: #2007682'''
+
+        self.generate('''network:
+  bonds:
+    aggi:
+      routing-policy:
+        - table: 1
+          from: 1.2.3.4
+      nameservers:
+        addresses:
+          - 1.2.3.4
+        search:
+          - example.com
+      interfaces:
+        - eth0
+  ethernets:
+    eth0:
+      ignore-carrier: true
+''')
+
+        self.assert_networkd({'aggi.netdev': '[NetDev]\nName=aggi\nKind=bond\n',
+                              'aggi.network': '''[Match]
+Name=aggi
+
+[Network]
+LinkLocalAddressing=ipv6
+DNS=1.2.3.4
+Domains=example.com
+ConfigureWithoutCarrier=yes
+
+[RoutingPolicyRule]
+From=1.2.3.4
+Table=1
+''',
+                              'eth0.network': ND_EMPTY % ('eth0', 'no') + 'Bond=aggi\n'})
 
 
 class TestMerging(TestBase):

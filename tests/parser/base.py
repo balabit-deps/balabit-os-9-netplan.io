@@ -1,5 +1,5 @@
 #
-# Blackbox tests of netplan's keyfile parser that verify that the generated
+# Functional tests of netplan's keyfile parser that verify that the generated
 # YAML files look as expected. These are run during "make check" and
 # don't touch the system configuration at all.
 #
@@ -21,6 +21,7 @@
 from configparser import ConfigParser
 from netplan.libnetplan import _GError
 import os
+import re
 import sys
 import shutil
 import tempfile
@@ -41,6 +42,8 @@ os.environ.update({'LD_LIBRARY_PATH': '.:{}'.format(os.environ.get('LD_LIBRARY_P
 os.environ['G_DEBUG'] = 'fatal-criticals'
 
 lib = ctypes.CDLL(ctypes.util.find_library('netplan'))
+
+WOKE_REPLACE_REGEX = ' +# wokeignore:rule=[a-z]+'
 
 
 # A contextmanager to catch the output on a low level so that it catches output
@@ -78,6 +81,7 @@ class TestKeyfileBase(unittest.TestCase):
         err = ctypes.POINTER(_GError)()
         # Autodetect default 'NM-<UUID>' netdef-id
         ssid = ''
+        keyfile = re.sub(WOKE_REPLACE_REGEX, '', keyfile)
         if not netdef_id:
             found_values = 0
             uuid = 'UNKNOWN_UUID'
@@ -124,7 +128,12 @@ class TestKeyfileBase(unittest.TestCase):
 
     def assert_netplan(self, file_contents_map):
         for uuid in file_contents_map.keys():
-            self.assertTrue(os.path.isfile(os.path.join(self.confdir, '90-NM-{}.yaml'.format(uuid))))
+            file_contents_map[uuid] = re.sub(WOKE_REPLACE_REGEX, '', file_contents_map[uuid])
+            path = os.path.join(self.confdir, '90-NM-{}.yaml'.format(uuid))
+            self.assertTrue(os.path.isfile(path))
+            st = os.stat(path)
+            permission = oct(st.st_mode & 0o777)
+            self.assertEqual(permission, '0o600')
             with open(os.path.join(self.confdir, '90-NM-{}.yaml'.format(uuid)), 'r') as f:
                 self.assertEqual(f.read(), file_contents_map[uuid])
 
@@ -164,7 +173,7 @@ class TestKeyfileBase(unittest.TestCase):
     def assert_nm_regenerate(self, file_contents_map):
         argv = [exe_generate, '--root-dir', self.workdir.name]
         p = subprocess.Popen(argv, stdout=subprocess.PIPE,
-                             stderr=subprocess.PIPE, universal_newlines=True)
+                             stderr=subprocess.PIPE, text=True)
         returncode = p.wait(5)
         (out, err) = p.communicate()
         self.assertEqual(returncode, 0, err)
@@ -174,6 +183,7 @@ class TestKeyfileBase(unittest.TestCase):
             self.assertEqual(set(os.listdir(con_dir)),
                              set([n for n in file_contents_map]))
             for fname, contents in file_contents_map.items():
+                contents = re.sub(WOKE_REPLACE_REGEX, '', contents)
                 with open(os.path.join(con_dir, fname)) as f:
                     generated_keyfile = self.normalize_keyfile(f.read())
                     normalized_contents = self.normalize_keyfile(contents)

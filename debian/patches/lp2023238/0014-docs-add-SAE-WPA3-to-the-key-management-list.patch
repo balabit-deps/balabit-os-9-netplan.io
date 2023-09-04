@@ -1,0 +1,26 @@
+From: Danilo Egea Gondolfo <danilo.egea.gondolfo@canonical.com>
+Date: Fri, 16 Jun 2023 18:37:26 +0100
+Subject: docs: add SAE (WPA3) to the key-management list
+
+Bug: https://bugs.launchpad.net/netplan/+bug/2023238
+Origin: https://github.com/canonical/netplan/pull/369/commits/3a1ec883cf19e2e9df86d105afc599a6e7a81290
+
+---
+ doc/netplan-yaml.md | 4 ++--
+ 1 file changed, 2 insertions(+), 2 deletions(-)
+
+diff --git a/doc/netplan-yaml.md b/doc/netplan-yaml.md
+index 5e8f067..a20794e 100644
+--- a/doc/netplan-yaml.md
++++ b/doc/netplan-yaml.md
+@@ -840,8 +840,8 @@ interfaces, as well as individual wifi networks, by means of the `auth` block.
+ 
+     > The supported key management modes are `none` (no key management);
+     > `psk` (WPA with pre-shared key, common for home wifi); `eap` (WPA
+-    > with EAP, common for enterprise wifi); and `802.1x` (used primarily
+-    > for wired Ethernet connections).
++    > with EAP, common for enterprise wifi); `sae` (used by WPA3); and `802.1x`
++    > (used primarily for wired Ethernet connections).
+ 
+   - **password** (scalar)
+ 

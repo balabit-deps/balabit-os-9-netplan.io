@@ -93,15 +93,11 @@ class NetplanIpLeases(utils.NetplanCommand):
             def lease_method_nm_connection():
                 # FIXME: handle older versions of NM where 'nmcli dev show' doesn't exist
                 try:
-                    nmcli_dev_out = subprocess.check_output(['nmcli', 'dev', 'show', self.interface],
-                                                            env=dict(LC_ALL='C', PATH=os.environ.get('PATH', os.defpath)),
-                                                            universal_newlines=True)
+                    nmcli_dev_out = utils.nmcli_out(['dev', 'show', self.interface])
                     for line in nmcli_dev_out.splitlines():
                         if 'GENERAL.CONNECTION' in line:
                             conn_id = line.split(':')[1].rstrip().strip()
-                            nmcli_con_out = subprocess.check_output(['nmcli', 'con', 'show', 'id', conn_id],
-                                                                    env=dict(LC_ALL='C', PATH=os.environ.get('PATH', os.defpath)),
-                                                                    universal_newlines=True)
+                            nmcli_con_out = utils.nmcli_out(['con', 'show', 'id', conn_id])
                             for line in nmcli_con_out.splitlines():
                                 if 'connection.uuid' in line:
                                     return line.split(':')[1].rstrip().strip()
@@ -144,8 +140,9 @@ class NetplanIpLeases(utils.NetplanCommand):
         # Extract out of the generator our mapping in a dict.
         logging.debug('command ip leases: running %s', argv)
         try:
-            out = subprocess.check_output(argv, universal_newlines=True)
+            out = subprocess.check_output(argv, text=True)
         except CalledProcessError:  # pragma: nocover (better be covered in autopkgtest)
+            print("No lease found for interface '%s' (not managed by Netplan)" % self.interface, file=sys.stderr)
             sys.exit(1)
         mapping = {}
         mapping_s = out.split(',')

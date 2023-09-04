@@ -1,0 +1,26 @@
+From: Danilo Egea Gondolfo <danilo.egea.gondolfo@canonical.com>
+Date: Fri, 19 May 2023 14:37:27 +0100
+Subject: parse-nm: plug a memory leak
+
+Bug: https://bugs.launchpad.net/netplan/+bug/2016473
+Origin: https://github.com/canonical/netplan/commit/8c6f877
+
+The second parameter of g_datalist_set_data_full() is not stored in the
+list and must be free'd.
+---
+ src/parse-nm.c | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/src/parse-nm.c b/src/parse-nm.c
+index 9ae6090..e863fea 100644
+--- a/src/parse-nm.c
++++ b/src/parse-nm.c
+@@ -450,7 +450,7 @@ read_passthrough(GKeyFile* kf, GData** list)
+                 }
+                 group_key = g_strconcat(groups[i], ".", keys[j], NULL);
+                 g_datalist_set_data_full(list, group_key, value, g_free);
+-                /* no need to free group_key and value: they stay in the list */
++                g_free(group_key);
+             }
+             g_strfreev(keys);
+         }

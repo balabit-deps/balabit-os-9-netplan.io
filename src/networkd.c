@@ -82,8 +82,15 @@ append_match_section(const NetplanNetDefinition* def, GString* s, gboolean match
         g_strfreev(split);
     } else if (def->match.driver)
         g_string_append_printf(s, "Driver=%s\n", def->match.driver);
-    if (def->match.mac)
-        g_string_append_printf(s, "MACAddress=%s\n", def->match.mac);
+    if (def->match.mac) {
+        /* LP: #1804861 and LP: #1888726:
+         * Using bond, bridge, and VLAN devices results in sharing MAC
+         * addresses across interfaces.  Match by PermanentMACAddress to match
+         * only the real phy interface and to continue to match it even after
+         * its MAC address has been changed.
+         */
+        g_string_append_printf(s, "PermanentMACAddress=%s\n", def->match.mac);
+    }
     /* name matching is special: if the .link renames the interface, the
      * .network has to use the renamed one, otherwise the original one */
     if (!match_rename && def->match.original_name)
@@ -95,23 +102,6 @@ append_match_section(const NetplanNetDefinition* def, GString* s, gboolean match
             g_string_append_printf(s, "Name=%s\n", def->set_name);
         else if (def->match.original_name)
             g_string_append_printf(s, "Name=%s\n", def->match.original_name);
-    }
-
-    /* Workaround for bugs LP: #1804861 and LP: #1888726: something outputs
-     * netplan config that includes using the MAC of the first phy member of a
-     * bond as default value for the MAC of the bond device itself. This is
-     * evil, it's an optional field and networkd knows what to do if the MAC
-     * isn't specified; but work around this by adding an arbitrary additional
-     * match condition on Path= for the phys. This way, hopefully setting a MTU
-     * on the phy does not bleed over to bond/bridge and any further virtual
-     * devices (VLANs?) on top of it.
-     * Make sure to add the extra match only if we're matching by MAC
-     * already and dealing with a bond, bridge or vlan.
-     */
-    if (def->bond || def->bridge || def->has_vlans) {
-        /* update if we support new device types */
-        if (def->match.mac)
-            g_string_append(s, "Type=!vlan bond bridge\n");
     }
 }
 
@@ -361,8 +351,8 @@ write_bond_parameters(const NetplanNetDefinition* def, GString* s)
         g_string_append_printf(params, "\nTransmitHashPolicy=%s", def->bond_params.transmit_hash_policy);
     if (def->bond_params.selection_logic)
         g_string_append_printf(params, "\nAdSelect=%s", def->bond_params.selection_logic);
-    if (def->bond_params.all_slaves_active)
-        g_string_append_printf(params, "\nAllSlavesActive=%d", def->bond_params.all_slaves_active);
+    if (def->bond_params.all_members_active)
+        g_string_append_printf(params, "\nAllSlavesActive=%d", def->bond_params.all_members_active); /* wokeignore:rule=slave */ 
     if (def->bond_params.arp_interval) {
         g_string_append(params, "\nARPIntervalSec=");
         if (interval_has_suffix(def->bond_params.arp_interval))
@@ -401,8 +391,8 @@ write_bond_parameters(const NetplanNetDefinition* def, GString* s)
     if (def->bond_params.gratuitous_arp)
         g_string_append_printf(params, "\nGratuitousARP=%d", def->bond_params.gratuitous_arp);
     /* TODO: add unsolicited_na, not documented as supported by NM. */
-    if (def->bond_params.packets_per_slave)
-        g_string_append_printf(params, "\nPacketsPerSlave=%d", def->bond_params.packets_per_slave);
+    if (def->bond_params.packets_per_member)
+        g_string_append_printf(params, "\nPacketsPerSlave=%d", def->bond_params.packets_per_member); /* wokeignore:rule=slave */ 
     if (def->bond_params.primary_reselect_policy)
         g_string_append_printf(params, "\nPrimaryReselectPolicy=%s", def->bond_params.primary_reselect_policy);
     if (def->bond_params.resend_igmp)
@@ -436,13 +426,13 @@ write_vxlan_parameters(const NetplanNetDefinition* def, GString* s)
         g_string_append_printf(params, "\nTOS=%d", def->vxlan->tos);
     if (def->tunnel_ttl)
         g_string_append_printf(params, "\nTTL=%d", def->tunnel_ttl);
-    if (def->vxlan->mac_learning)
+    if (def->vxlan->mac_learning != NETPLAN_TRISTATE_UNSET)
         g_string_append_printf(params, "\nMacLearning=%s", def->vxlan->mac_learning ? "true" : "false");
     if (def->vxlan->ageing)
         g_string_append_printf(params, "\nFDBAgeingSec=%d", def->vxlan->ageing);
     if (def->vxlan->limit)
         g_string_append_printf(params, "\nMaximumFDBEntries=%d", def->vxlan->limit);
-    if (def->vxlan->arp_proxy)
+    if (def->vxlan->arp_proxy != NETPLAN_TRISTATE_UNSET)
         g_string_append_printf(params, "\nReduceARPProxy=%s", def->vxlan->arp_proxy ? "true" : "false");
     if (def->vxlan->notifications) {
         if (def->vxlan->notifications & NETPLAN_VXLAN_NOTIFICATION_L2_MISS)
@@ -450,7 +440,7 @@ write_vxlan_parameters(const NetplanNetDefinition* def, GString* s)
         if (def->vxlan->notifications & NETPLAN_VXLAN_NOTIFICATION_L3_MISS)
             g_string_append(params, "\nL3MissNotification=true");
     }
-    if (def->vxlan->short_circuit)
+    if (def->vxlan->short_circuit != NETPLAN_TRISTATE_UNSET)
         g_string_append_printf(params, "\nRouteShortCircuit=%s", def->vxlan->short_circuit ? "true" : "false");
     if (def->vxlan->checksums) {
         if (def->vxlan->checksums & NETPLAN_VXLAN_CHECKSUM_UDP)
@@ -853,8 +843,8 @@ netplan_netdef_write_network_file(
     if (def->bond && def->backend != NETPLAN_BACKEND_OVS) {
         g_string_append_printf(network, "Bond=%s\n", def->bond);
 
-        if (def->bond_params.primary_slave)
-            g_string_append_printf(network, "PrimarySlave=true\n");
+        if (def->bond_params.primary_member)
+            g_string_append_printf(network, "PrimarySlave=true\n"); /* wokeignore:rule=slave */
     }
 
     if (def->has_vlans && def->backend != NETPLAN_BACKEND_OVS) {
@@ -871,6 +861,20 @@ netplan_netdef_write_network_file(
     /* VRF linkage */
     if (def->vrf_link)
         g_string_append_printf(network, "VRF=%s\n", def->vrf_link->id);
+
+    /* VXLAN options */
+    if (def->has_vxlans) {
+        /* iterate over all netdefs to find VXLANs attached to us */
+        GList *l = np_state->netdefs_ordered;
+        const NetplanNetDefinition* nd;
+        for (; l != NULL; l = l->next) {
+            nd = l->data;
+            if (nd->vxlan && nd->vxlan->link == def &&
+                nd->type == NETPLAN_DEF_TYPE_TUNNEL &&
+                nd->tunnel.mode == NETPLAN_TUNNEL_MODE_VXLAN)
+                g_string_append_printf(network, "VXLAN=%s\n", nd->id);
+        }
+    }
 
     if (def->routes != NULL) {
         for (unsigned i = 0; i < def->routes->len; ++i) {
@@ -944,20 +948,6 @@ netplan_netdef_write_network_file(
     /* IP-over-InfiniBand, IPoIB */
     if (def->ib_mode != NETPLAN_IB_MODE_KERNEL) {
         g_string_append_printf(network, "\n[IPoIB]\nMode=%s\n", netplan_infiniband_mode_name(def->ib_mode));
-    }
-
-    /* VXLAN options */
-    if (def->has_vxlans) {
-        /* iterate over all netdefs to find VXLANs attached to us */
-        GList *l = np_state->netdefs_ordered;
-        const NetplanNetDefinition* nd;
-        for (; l != NULL; l = l->next) {
-            nd = l->data;
-            if (nd->vxlan && nd->vxlan->link == def &&
-                nd->type == NETPLAN_DEF_TYPE_TUNNEL &&
-                nd->tunnel.mode == NETPLAN_TUNNEL_MODE_VXLAN)
-                g_string_append_printf(network, "VXLAN=%s\n", nd->id);
-        }
     }
 
     if (network->len > 0 || link->len > 0) {
@@ -1162,8 +1152,10 @@ write_wpa_conf(const NetplanNetDefinition* def, const char* rootdir, GError** er
     if (def->type == NETPLAN_DEF_TYPE_WIFI) {
         if (def->wowlan && def->wowlan > NETPLAN_WIFI_WOWLAN_DEFAULT) {
             g_string_append(s, "wowlan_triggers=");
-            if (!append_wifi_wowlan_flags(def->wowlan, s, error))
+            if (!append_wifi_wowlan_flags(def->wowlan, s, error)) {
+                g_string_free(s, TRUE);
                 return FALSE;
+            }
         }
         /* available as of wpa_supplicant version 0.6.7 */
         if (def->regulatory_domain) {
@@ -1213,13 +1205,16 @@ write_wpa_conf(const NetplanNetDefinition* def, const char* rootdir, GError** er
                     break;
                 default:
                     g_set_error(error, G_MARKUP_ERROR, G_MARKUP_ERROR_INVALID_CONTENT, "ERROR: %s: %s: networkd does not support this wifi mode\n", def->id, ap->ssid);
+                    g_string_free(s, TRUE);
                     return FALSE;
             }
 
             /* wifi auth trumps netdef auth */
             if (ap->has_auth) {
-                if (!append_wpa_auth_conf(s, &ap->auth, ap->ssid, error))
+                if (!append_wpa_auth_conf(s, &ap->auth, ap->ssid, error)) {
+                    g_string_free(s, TRUE);
                     return FALSE;
+                }
             }
             else {
                 g_string_append(s, "  key_mgmt=NONE\n");
@@ -1230,8 +1225,10 @@ write_wpa_conf(const NetplanNetDefinition* def, const char* rootdir, GError** er
     else {
         /* wired 802.1x auth or similar */
         g_string_append(s, "network={\n");
-        if (!append_wpa_auth_conf(s, &def->auth, def->id, error))
+        if (!append_wpa_auth_conf(s, &def->auth, def->id, error)) {
+            g_string_free(s, TRUE);
             return FALSE;
+        }
         g_string_append(s, "}\n");
     }
 
@@ -1250,7 +1247,7 @@ write_wpa_conf(const NetplanNetDefinition* def, const char* rootdir, GError** er
  * @has_been_written: TRUE if @def applies to networkd, FALSE otherwise.
  * Returns: FALSE on error.
  */
-NETPLAN_INTERNAL gboolean
+gboolean
 netplan_netdef_write_networkd(
         const NetplanState* np_state,
         const NetplanNetDefinition* def,
@@ -1258,6 +1255,7 @@ netplan_netdef_write_networkd(
         gboolean* has_been_written,
         GError** error)
 {
+    /* TODO: make use of netplan_netdef_get_output_filename() */
     g_autofree char* path_base = g_strjoin(NULL, "run/systemd/network/10-netplan-", def->id, NULL);
     SET_OPT_OUT_PTR(has_been_written, FALSE);
 

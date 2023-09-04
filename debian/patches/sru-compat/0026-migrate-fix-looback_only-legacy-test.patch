@@ -1,0 +1,21 @@
+From: =?utf-8?q?Lukas_M=C3=A4rdian?= <slyon@ubuntu.com>
+Date: Thu, 24 Aug 2023 11:39:46 +0200
+Subject: migrate: fix looback_only legacy test
+
+---
+ netplan/cli/commands/migrate.py | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/netplan/cli/commands/migrate.py b/netplan/cli/commands/migrate.py
+index 94944dd..c283412 100644
+--- a/netplan/cli/commands/migrate.py
++++ b/netplan/cli/commands/migrate.py
+@@ -313,7 +313,7 @@ To install it on Debian or Ubuntu-based system, run `apt install python3-yaml`""
+                     sys.exit(3)
+                 logging.info('migration complete, wrote %s', dest)
+         else:
+-            logging.info('ifupdown does not configure any interfaces, nothing to migrate')
++            logging.warning('ifupdown does not configure any interfaces, nothing to migrate')
+ 
+         if not self.dry_run:
+             logging.info('renaming %s to %s.netplan-converted', if_config, if_config)

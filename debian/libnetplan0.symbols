@@ -6,6 +6,9 @@ libnetplan.so.0.0 libnetplan0 #MINVER#
  _netplan_iter_defs_per_devtype_init@Base 0.104
  _netplan_iter_defs_per_devtype_next@Base 0.104
  _netplan_netdef_get_critical@Base 0.105
+ _netplan_netdef_get_delay_vf_rebind@Base 0.106
+ _netplan_netdef_get_embedded_switch_mode@Base 0.106
+ _netplan_netdef_get_optional@Base 0.106
  _netplan_netdef_get_sriov_link@Base 0.105
  _netplan_netdef_get_sriov_vlan_filter@Base 0.105
  _netplan_netdef_get_vlan_id@Base 0.105
@@ -23,6 +26,9 @@ libnetplan.so.0.0 libnetplan0 #MINVER#
  get_unspecified_address@Base 0.104
  global_backend@Base 0.104
  global_state@Base 0.104
+ is_route_present@Base 0.106
+ is_route_rule_present@Base 0.106.1
+ is_string_in_array@Base 0.106.1
  is_wireguard_key@Base 0.100
  netdefs@Base 0.99
  netdefs_ordered@Base 0.99
@@ -31,19 +37,29 @@ libnetplan.so.0.0 libnetplan0 #MINVER#
  netplan_clear_netdefs@Base 0.101
  netplan_def_type_name@Base 0.105
  netplan_delete_connection@Base 0.102
+ netplan_error_clear@Base 0.106
+ netplan_error_code@Base 0.106
+ netplan_error_message@Base 0.106
  netplan_finish_parse@Base 0.99
  netplan_generate@Base 0.102
  netplan_get_filename_by_id@Base 0.102
  netplan_get_global_backend@Base 0.99
  netplan_get_id_from_nm_filename@Base 0.102
+ netplan_get_id_from_nm_filepath@Base 0.106
  netplan_netdef_get_backend@Base 0.105
+ netplan_netdef_get_bond_link@Base 0.106
+ netplan_netdef_get_bridge_link@Base 0.106
  netplan_netdef_get_delay_virtual_functions_rebind@Base 0.104
  netplan_netdef_get_embedded_switch_mode@Base 0.104
  netplan_netdef_get_filename@Base 0.104
  netplan_netdef_get_filepath@Base 0.105
  netplan_netdef_get_id@Base 0.104
+ netplan_netdef_get_output_filename@Base 0.106
+ netplan_netdef_get_peer_link@Base 0.106
  netplan_netdef_get_set_name@Base 0.105
+ netplan_netdef_get_sriov_link@Base 0.106
  netplan_netdef_get_type@Base 0.105
+ netplan_netdef_get_vlan_link@Base 0.106
  netplan_netdef_has_match@Base 0.105
  netplan_netdef_match_interface@Base 0.105
  netplan_netdef_write_network_file@Base 0.104
@@ -75,6 +91,9 @@ libnetplan.so.0.0 libnetplan0 #MINVER#
  netplan_state_get_netdef@Base 0.104
  netplan_state_get_netdefs_size@Base 0.104
  netplan_state_import_parser_results@Base 0.104
+ netplan_state_iterator_has_next@Base 0.106
+ netplan_state_iterator_init@Base 0.106
+ netplan_state_iterator_next@Base 0.106
  netplan_state_new@Base 0.104
  netplan_state_reset@Base 0.104
  netplan_state_update_yaml_hierarchy@Base 0.105

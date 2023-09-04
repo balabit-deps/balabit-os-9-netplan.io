@@ -1,5 +1,5 @@
 #!/usr/bin/python3
-# Blackbox tests of NetworkManager keyfile parser. These are run during
+# Functional tests of NetworkManager keyfile parser. These are run during
 # "make check" and don't touch the system configuration at all.
 #
 # Copyright (C) 2021 Canonical, Ltd.
@@ -388,7 +388,7 @@ route2=4:5:6:7:8:9:0:1/63,,5
         self._template_keyfile_type('nm-devices', 'wireguard', False)
 
     def test_keyfile_type_other(self):
-        self._template_keyfile_type('nm-devices', 'dummy', False)
+        self._template_keyfile_type('nm-devices', 'dummy', False)  # wokeignore:rule=dummy
 
     def test_keyfile_type_wifi(self):
         self.generate_from_keyfile('''[connection]
@@ -718,7 +718,7 @@ ip6-privacy=0
 [wifi]
 ssid=my-hotspot
 mode=ap
-mac-address-blacklist=
+mac-address-blacklist= # wokeignore:rule=blacklist
 
 [wifi-security]
 group=ccmp;
@@ -750,7 +750,7 @@ psk=test1234
               ipv4.dns-search: ""
               ipv6.addr-gen-mode: "1"
               ipv6.dns-search: ""
-              wifi.mac-address-blacklist: ""
+              wifi.mac-address-blacklist: "" # wokeignore:rule=blacklist
               wifi-security.group: "ccmp;"
               wifi-security.pairwise: "ccmp;"
               wifi-security.proto: "rsn;"
@@ -901,12 +901,12 @@ interface-name=bn0
 
 [bond]
 mode=802.3ad
-lacp_rate=10
+lacp_rate=fast
 miimon=10
 min_links=10
 xmit_hash_policy=none
 ad_select=none
-all_slaves_active=1
+all_slaves_active=1 # wokeignore:rule=slave
 arp_interval=10
 arp_ip_target=10.10.10.10,20.20.20.20
 arp_validate=all
@@ -916,7 +916,7 @@ downdelay=10
 fail_over_mac=none
 num_grat_arp=10
 num_unsol_na=10
-packets_per_slave=10
+packets_per_slave=10 # wokeignore:rule=slave
 primary_reselect=none
 resend_igmp=10
 lp_interval=10
@@ -938,7 +938,7 @@ method=ignore
         mii-monitor-interval: "10"
         up-delay: "10"
         down-delay: "10"
-        lacp-rate: "10"
+        lacp-rate: "fast"
         transmit-hash-policy: "none"
         ad-select: "none"
         arp-validate: "all"
@@ -948,9 +948,9 @@ method=ignore
         learn-packet-interval: "10"
         arp-interval: "10"
         min-links: 10
-        all-slaves-active: true
+        all-members-active: true
         gratuitous-arp: 10
-        packets-per-slave: 10
+        packets-per-member: 10
         resend-igmp: 10
         arp-ip-targets:
         - 10.10.10.10
@@ -1017,7 +1017,7 @@ method=auto
 address1=10.10.28.159/24
 address2=10.10.164.254/24
 address3=10.10.246.132/24
-dns=8.8.8.8;8.8.4.4;8.8.8.8;8.8.4.4;8.8.8.8;8.8.4.4;
+dns=8.8.8.8;8.8.4.4;
 
 [ipv6]
 method=auto
@@ -1033,10 +1033,6 @@ ip6-privacy=0
         name: "cdc-wdm1"
       nameservers:
         addresses:
-        - 8.8.8.8
-        - 8.8.4.4
-        - 8.8.8.8
-        - 8.8.4.4
         - 8.8.8.8
         - 8.8.4.4
       dhcp4: true
@@ -1063,7 +1059,7 @@ timestamp=305419896
 
 [ethernet]
 mac-address=99:88:77:66:55:44
-mac-address-blacklist=
+mac-address-blacklist= # wokeignore:rule=blacklist
 mtu=900
 
 [ipv4]
@@ -1146,7 +1142,7 @@ route4=5:6:7:8:9:0:1:2/62
           connection.autoconnect: "false"
           connection.permissions: ""
           connection.timestamp: "305419896"
-          ethernet.mac-address-blacklist: ""
+          ethernet.mac-address-blacklist: "" # wokeignore:rule=blacklist
           ipv4.address1: "192.168.0.5/24,192.168.0.1"
           ipv4.dns-search: ""
           ipv4.method: "manual"
@@ -1351,3 +1347,147 @@ dns-search=wallaceandgromit.com;
           ipv6.ip6-privacy: "-1"
           proxy._: ""
 '''.format(UUID, UUID)})
+
+    def test_keyfile_nm_140_default_ethernet_group(self):
+        self.generate_from_keyfile('''[connection]
+id=Test Write Bridge Main
+uuid={}
+type=bridge
+interface-name=br0
+
+[ethernet]
+
+[bridge]
+
+[ipv4]
+address1=1.2.3.4/24,1.1.1.1
+method=manual
+
+[ipv6]
+addr-gen-mode=default
+method=auto
+
+[proxy]\n'''.format(UUID), netdef_id='br0')
+        self.assert_netplan({UUID: '''network:
+  version: 2
+  bridges:
+    br0:
+      renderer: NetworkManager
+      addresses:
+      - "1.2.3.4/24"
+      dhcp6: true
+      networkmanager:
+        uuid: "{}"
+        name: "Test Write Bridge Main"
+        passthrough:
+          ethernet._: ""
+          bridge._: ""
+          ipv4.address1: "1.2.3.4/24,1.1.1.1"
+          ipv4.method: "manual"
+          ipv6.addr-gen-mode: "default"
+          ipv6.ip6-privacy: "-1"
+          proxy._: ""
+'''.format(UUID)})
+
+    def test_multiple_eap_methods(self):
+        self.generate_from_keyfile('''[connection]
+id=MyWifi
+uuid={}
+type=wifi
+interface-name=wlp2s0
+
+[wifi]
+mode=infrastructure
+ssid=MyWifi
+
+[wifi-security]
+auth-alg=open
+key-mgmt=wpa-eap
+
+[802-1x]
+ca-cert=/path/to/my/crt.crt
+eap=peap;tls
+identity=username
+password=123456
+phase2-auth=mschapv2
+
+[ipv4]
+method=auto\n'''.format(UUID))
+        self.assert_netplan({UUID: '''network:
+  version: 2
+  wifis:
+    NM-{}:
+      renderer: NetworkManager
+      match:
+        name: "wlp2s0"
+      dhcp4: true
+      access-points:
+        "MyWifi":
+          auth:
+            key-management: "eap"
+            method: "peap"
+            identity: "username"
+            ca-certificate: "/path/to/my/crt.crt"
+            phase2-auth: "mschapv2"
+            password: "123456"
+          networkmanager:
+            uuid: "{}"
+            name: "MyWifi"
+            passthrough:
+              wifi-security.auth-alg: "open"
+              802-1x.eap: "peap;tls"
+      networkmanager:
+        uuid: "{}"
+        name: "MyWifi"
+'''.format(UUID, UUID, UUID)})
+
+    def test_single_eap_method(self):
+        self.generate_from_keyfile('''[connection]
+id=MyWifi
+uuid={}
+type=wifi
+interface-name=wlp2s0
+
+[wifi]
+mode=infrastructure
+ssid=MyWifi
+
+[wifi-security]
+auth-alg=open
+key-mgmt=wpa-eap
+
+[802-1x]
+ca-cert=/path/to/my/crt.crt
+eap=peap;
+identity=username
+password=123456
+phase2-auth=mschapv2
+
+[ipv4]
+method=auto\n'''.format(UUID))
+        self.assert_netplan({UUID: '''network:
+  version: 2
+  wifis:
+    NM-{}:
+      renderer: NetworkManager
+      match:
+        name: "wlp2s0"
+      dhcp4: true
+      access-points:
+        "MyWifi":
+          auth:
+            key-management: "eap"
+            method: "peap"
+            identity: "username"
+            ca-certificate: "/path/to/my/crt.crt"
+            phase2-auth: "mschapv2"
+            password: "123456"
+          networkmanager:
+            uuid: "{}"
+            name: "MyWifi"
+            passthrough:
+              wifi-security.auth-alg: "open"
+      networkmanager:
+        uuid: "{}"
+        name: "MyWifi"
+'''.format(UUID, UUID, UUID)})

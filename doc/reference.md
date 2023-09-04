@@ -1,8 +1,11 @@
 # Reference
 
+## YAML configuration
 Netplan's configuration files use the
-[YAML](<http://yaml.org/spec/1.1/current.html>) format. All
-`/{lib,etc,run}/netplan/*.yaml` are considered.
+[YAML (v1.1)](<http://yaml.org/spec/1.1/current.html>) format. All files in
+`/{lib,etc,run}/netplan/*.yaml` are considered and are supposed to use
+restrictive file permissions (`600` / `rw-------`), i.e. owner (root) read-write
+only.
 
 The top-level node in a netplan configuration file is a ``network:`` mapping
 that contains ``version: 2`` (the YAML currently being used by curtin, MaaS,
@@ -25,5 +28,28 @@ that can be used from different binaries (like Netplan’s `generate`,
 Python bindings or external applications like the NetworkManager, using the
 Netplan backend).
 
-* [API reference](https://discourse.ubuntu.com/t/29106)
-  – C API and Python bindings for libnetplan
+```{toctree}
+API specification <https://discourse.ubuntu.com/t/29106>
+```
+
+## Netplan CLI
+Netplan's manpages describe the usage of the different command line interface
+tools available. Those are also installed on a system running Netplan and can be
+accessed, using the `man` utility.
+```{toctree}
+---
+maxdepth: 2
+---
+cli
+```
+
+## Netplan D-Bus
+Netplan provides a daemon that can be run to provide the `io.netplan.Netplan`
+D-Bus API, to control certain aspects of a system's Netplan configuration
+programmatically. See also: [DBus config API](/dbus-config).
+```{toctree}
+---
+maxdepth: 1
+---
+Netplan D-Bus <netplan-dbus>
+```

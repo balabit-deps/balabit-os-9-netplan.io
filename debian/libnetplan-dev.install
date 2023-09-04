@@ -1,2 +1,3 @@
 usr/include/netplan/*.h
 usr/lib/*/libnetplan*.so
+usr/lib/*/pkgconfig/netplan.pc

@@ -1,0 +1,35 @@
+From: =?utf-8?q?Lukas_M=C3=A4rdian?= <slyon@ubuntu.com>
+Date: Thu, 24 Aug 2023 11:50:05 +0200
+Subject: Keep old file permission, for backwards compatibility
+
+---
+ src/abi_compat.c | 2 +-
+ src/netplan.c    | 2 +-
+ 2 files changed, 2 insertions(+), 2 deletions(-)
+
+diff --git a/src/abi_compat.c b/src/abi_compat.c
+index a2b1107..2879bf5 100644
+--- a/src/abi_compat.c
++++ b/src/abi_compat.c
+@@ -129,7 +129,7 @@ write_netplan_conf_full(const char* file_hint, const char* rootdir)
+         !netplan_state_get_netdefs_size(&global_state))
+         return;
+     path = g_build_path(G_DIR_SEPARATOR_S, rootdir ?: G_DIR_SEPARATOR_S, "etc", "netplan", file_hint, NULL);
+-    int fd = open(path, O_WRONLY | O_CREAT | O_TRUNC, 0600);
++    int fd = open(path, O_WRONLY | O_CREAT | O_TRUNC, 0640);
+     netplan_state_dump_yaml(&global_state, fd, NULL);
+     close(fd);
+ }
+diff --git a/src/netplan.c b/src/netplan.c
+index 1241c09..80cf3f1 100644
+--- a/src/netplan.c
++++ b/src/netplan.c
+@@ -1236,7 +1236,7 @@ netplan_state_update_yaml_hierarchy(const NetplanState* np_state, const char* de
+         const char *filename = key;
+         gboolean is_fallback = (g_strcmp0(filename, default_path) == 0);
+         GList* netdefs = value;
+-        out_fd = open(filename, O_WRONLY | O_CREAT | O_TRUNC, 0600);
++        out_fd = open(filename, O_WRONLY | O_CREAT | O_TRUNC, 0640);
+         if (out_fd < 0)
+             goto file_error;
+         if (!netplan_netdef_list_write_yaml(np_state, netdefs, out_fd, filename, is_fallback, error))

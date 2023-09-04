@@ -1,0 +1,43 @@
+From: =?utf-8?q?Lukas_M=C3=A4rdian?= <slyon@ubuntu.com>
+Date: Mon, 10 Jul 2023 12:44:41 +0200
+Subject: tests:base: introduce iface_json() helper
+
+Bug: https://github.com/canonical/netplan/pull/377
+Origin: https://github.com/canonical/netplan/pull/377/commits/c6239cd4c9cb01f8b0d37bf5f2d739480ded8f81
+
+iproute2 v6.4 changed its CLI output, the JSON output is expected to
+stay stable, so we should migrate to using iface_json() over time.
+
+https://bugs.debian.org/1040004
+---
+ tests/integration/base.py | 10 ++++++++++
+ 1 file changed, 10 insertions(+)
+
+diff --git a/tests/integration/base.py b/tests/integration/base.py
+index dad2d62..7044d33 100644
+--- a/tests/integration/base.py
++++ b/tests/integration/base.py
+@@ -31,6 +31,7 @@ import unittest
+ import shutil
+ import gi
+ import glob
++import json
+ 
+ # make sure we point to libnetplan properly.
+ os.environ.update({'LD_LIBRARY_PATH': '.:{}'.format(os.environ.get('LD_LIBRARY_PATH'))})
+@@ -278,6 +279,15 @@ class IntegrationTestsBase(unittest.TestCase):
+         else:
+             self.poll_text(dnsmasq_log, 'DHCP, IP range')
+ 
++    def iface_json(self, iface: str) -> dict:
++        '''Return iproute2's (detailed) JSON representation'''
++        out = subprocess.check_output(['ip', '-j', '-d', 'a', 'show', 'dev', iface],
++                                      text=True)
++        json_dict = json.loads(out)
++        if len(json_dict) == 1:
++            return json_dict[0]
++        return {}
++
+     def assert_iface(self, iface, expected_ip_a=None, unexpected_ip_a=None):
+         '''Assert that client interface has been created'''
+ 
