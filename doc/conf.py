@@ -2,7 +2,7 @@
 #
 # This file only contains a selection of the most common options. For a full
 # list see the documentation:
-# https://www.sphinx-doc.org/en/master/usage/configuration.html
+# https://www.sphinx-doc.org/en/master/usage/configuration.html  wokeignore:rule=master
 
 # -- Path setup --------------------------------------------------------------
 
@@ -27,7 +27,9 @@ author = 'Netplan team'
 # Add any Sphinx extension module names here, as strings. They can be
 # extensions coming with Sphinx (named 'sphinx.ext.*') or your custom
 # ones.
-extensions = ['sphinx_design', 'myst_parser']
+extensions = ['sphinx_design', 'myst_parser', 'sphinx_copybutton']
+myst_enable_extensions = ["colon_fence"]
+smartquotes_action = 'qe'
 
 # Add any paths that contain templates here, relative to this directory.
 templates_path = ['_templates']
@@ -49,6 +51,9 @@ html_theme = 'furo'
 # relative to this directory. They are copied after the builtin static files,
 # so a file named "default.css" will overwrite the builtin "default.css".
 html_static_path = ['_static']
+
+# The logo
+html_logo = 'netplan.svg'
 
 # -- Options for MyST --------------------------------------------------------
 myst_title_to_header = True

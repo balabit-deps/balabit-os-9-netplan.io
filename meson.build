@@ -1,5 +1,5 @@
 project('netplan', 'c',
-        version: '0.105',
+        version: '0.106.1',
         license: 'GPL3',
         default_options: [
             'c_std=c99',
@@ -15,6 +15,8 @@ yaml = dependency('yaml-0.1')
 uuid = dependency('uuid')
 libsystemd = dependency('libsystemd')
 
+meson_make_symlink = meson.current_source_dir() + '/tools/meson-make-symlink.sh'
+
 systemd = dependency('systemd')
 completions = dependency('bash-completion')
 systemd_generator_dir = systemd.get_variable(pkgconfig: 'systemdsystemgeneratordir')
@@ -23,19 +25,15 @@ bash_completions_dir = completions.get_variable(pkgconfig: 'completionsdir', def
 # Order: Fedora/Mageia/openSUSE || Debian/Ubuntu
 pyflakes = find_program('pyflakes-3', 'pyflakes3', required: false)
 pycodestyle = find_program('pycodestyle-3', 'pycodestyle', 'pep8', required: false)
-nose = find_program('nosetests-3', 'nosetests3')
+pytest = find_program('pytest-3', 'pytest3')  # also requires the pytest-cov plugin
+pycoverage = find_program('coverage-3', 'python3-coverage')
 pandoc = find_program('pandoc', required: false)
 find = find_program('find')
 
 add_project_arguments(
     '-DSBINDIR="' + join_paths(get_option('prefix'), get_option('sbindir')) + '"',
-    '-D_XOPEN_SOURCE=700',
+    '-D_GNU_SOURCE',
     language: 'c')
-
-message('Generating the _features.[py|h] code')
-#XXX: this is ugly as it produces artifacts in the source directory
-run_command('features_h_generator.sh', check: true)
-run_command('features_py_generator.sh', check: true)
 
 inc = include_directories('include')
 subdir('include')
@@ -66,7 +64,14 @@ test_env = [
     'LD_LIBRARY_PATH=' + join_paths(meson.current_build_dir(), 'src'),
     'NETPLAN_GENERATE_PATH=' + join_paths(meson.current_build_dir(), 'src', 'generate'),
     'NETPLAN_DBUS_CMD=' + join_paths(meson.current_build_dir(), 'dbus', 'netplan-dbus'),
+    'COVERAGE_PROCESS_START=' + join_paths(meson.current_source_dir(), '.coveragerc'),
+    'G_DEBUG=fatal_criticals',
 ]
+
+if get_option('unit_testing')
+  subdir('tests/ctests')
+endif
+
 #FIXME: exclude doc/env/
 test('linting',
      pyflakes,
@@ -78,13 +83,13 @@ test('documentation',
      find_program('tests/validate_docs.sh'),
      workdir: meson.current_source_dir())
 test('legacy-tests',
-     find_program('tests/cli.py'),
+     find_program('tests/cli_legacy.py'),
      timeout: 120,
      env: test_env)
 #TODO: split out dbus tests into own test() instance, to run in parallel
 test('unit-tests',
-     nose,
-     args: ['-v', '--with-coverage', meson.current_source_dir()],
+     pycoverage,
+     args: ['run', '-a', '-m', 'pytest', '-s', '-v', '--cov-append', meson.current_source_dir()],
      timeout: 600,
      env: test_env)
 
@@ -99,10 +104,10 @@ if get_option('b_coverage')
     gcovr = find_program('gcovr')
     ninja = find_program('ninja')
     grep  = find_program('grep')
-    pycoverage = find_program('python3-coverage')
     test('coverage-c-output',
          find_program('ninja'),
          args: ['-C', meson.current_build_dir(), 'coverage'],
+         timeout: 60,
          priority: -90, # run before 'coverage-c'
          is_parallel: false)
     test('coverage-c',
@@ -110,11 +115,16 @@ if get_option('b_coverage')
          args: ['^TOTAL.*100%$', join_paths(meson.current_build_dir(), 'meson-logs', 'coverage.txt')],
          priority: -99, # run last
          is_parallel: false)
+    test('coverage-py-combine',
+         pycoverage,
+         args: ['combine', '-a', meson.current_build_dir()],
+         priority: -90, # run before 'coverage-py-output'
+         is_parallel: false)
     test('coverage-py-output',
          pycoverage,
          args: ['html', '-d', join_paths(meson.current_build_dir(),
                 'meson-logs', 'coveragereport-py'), '--omit=/usr*'],
-         priority: -99, # run last
+         priority: -95, # run before 'coverage-py'
          is_parallel: false)
     test('coverage-py',
          pycoverage,

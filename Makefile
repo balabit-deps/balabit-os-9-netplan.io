@@ -4,11 +4,20 @@ BUILDFLAGS = \
 	-g \
 	-fPIC \
 	-std=c99 \
-	-D_XOPEN_SOURCE=700 \
+	-D_GNU_SOURCE \
 	-DSBINDIR=\"$(SBINDIR)\" \
 	-I${CURDIR}/include \
 	-Wall \
 	-Werror \
+	$(NULL)
+
+TESTFLAGS =	\
+	-g \
+	-O0 \
+	-DFIXTURESDIR=\"$(shell pwd)/tests/ctests/fixtures\" \
+	-Isrc \
+	--coverage \
+	-lcmocka \
 	$(NULL)
 
 SRCS = \
@@ -27,6 +36,13 @@ SRCS = \
 	src/validation.c \
 	$(NULL)
 
+TESTS = \
+	tests/ctests/test_netplan_error \
+	tests/ctests/test_netplan_misc \
+	tests/ctests/test_netplan_parser \
+	tests/ctests/test_netplan_state \
+	$(NULL)
+
 SYSTEMD_GENERATOR_DIR=$(shell pkg-config --variable=systemdsystemgeneratordir systemd)
 SYSTEMD_UNIT_DIR=$(shell pkg-config --variable=systemdsystemunitdir systemd)
 BASH_COMPLETIONS_DIR=$(shell pkg-config --variable=completionsdir bash-completion || echo "/etc/bash_completion.d")
@@ -43,12 +59,13 @@ DOCDIR ?= $(DATADIR)/doc
 MANDIR ?= $(DATADIR)/man
 INCLUDEDIR ?= $(PREFIX)/include
 
-PYCODE = netplan/ $(wildcard src/*.py) $(wildcard tests/*.py) $(wildcard tests/generator/*.py) $(wildcard tests/dbus/*.py)
+PYCODE = netplan/ $(wildcard src/*.py) $(wildcard tests/*.py) $(wildcard tests/generator/*.py) $(wildcard tests/cli/*.py) $(wildcard tests/netplan_dbus/*.py) $(wildcard tests/integration/*.py) $(wildcard tests/parser/*.py)
 
 # Order: Fedora/Mageia/openSUSE || Debian/Ubuntu || null
 PYFLAKES3 ?= $(shell command -v pyflakes-3 || command -v pyflakes3 || echo true)
 PYCODESTYLE3 ?= $(shell command -v pycodestyle-3 || command -v pycodestyle || command -v pep8 || echo true)
-NOSETESTS3 ?= $(shell command -v nosetests-3 || command -v nosetests3 || echo true)
+PYTEST3 ?= $(shell command -v pytest-3 || command -v pytest3 || echo true)
+PYCOVERAGE ?= $(shell command -v python3-coverage || echo true)
 
 default: netplan/_features.py generate netplan-dbus dbus/io.netplan.Netplan.service doc/netplan.html doc/netplan.5 doc/netplan-generate.8 doc/netplan-apply.8 doc/netplan-try.8 doc/netplan-dbus.8 doc/netplan-get.8 doc/netplan-set.8
 
@@ -76,25 +93,32 @@ netplan/_features.py: src/[^_]*.[hc]
 	awk 'match ($$0, /netplan-feature:.*/ ) { $$0=substr($$0, RSTART, RLENGTH); print "    \""$$2"\"," }' $^ >> $@
 	echo "]" >> $@
 
+$(TESTS): %: %.c
+	$(CC) $(BUILDFLAGS) $(CFLAGS) -o $@ $< `pkg-config --cflags --libs glib-2.0 gio-2.0 yaml-0.1 uuid` $(TESTFLAGS)
+	./$@
+
 clean:
 	rm -f netplan/_features.py src/_features.h src/_features.h.gch
 	rm -f generate doc/*.html doc/*.[1-9]
 	rm -f *.o *.so*
 	rm -f netplan-dbus dbus/*.service
 	rm -f *.gcda *.gcno generate.info
-	rm -rf test-coverage .coverage coverage.xml
+	rm -f tests/ctests/*.gcda tests/ctests/*.gcno
+	rm -rf test-coverage .coverage
+	rm -f .coverage.* coverage.xml
 	find . | grep -E "(__pycache__|\.pyc)" | xargs rm -rf
+	rm -f $(TESTS)
 
-check: default linting
-	PYTHONPATH=. LD_LIBRARY_PATH=. tests/cli.py
-	PYTHONPATH=. LD_LIBRARY_PATH=. $(NOSETESTS3) -v --with-coverage
+check: default linting $(TESTS)
+	PYTHONPATH=. LD_LIBRARY_PATH=. tests/cli_legacy.py
+	PYTHONPATH=. LD_LIBRARY_PATH=. $(PYCOVERAGE) run -a -m pytest -s -v --cov-append
 	tests/validate_docs.sh
 
 linting:
 	$(PYFLAKES3) $(PYCODE)
 	$(PYCODESTYLE3) --max-line-length=130 $(PYCODE)
 
-coverage: | pre-coverage c-coverage python-coverage
+coverage: | pre-coverage c-coverage python-coverage-combine python-coverage
 
 pre-coverage:
 	rm -f .coverage
@@ -111,6 +135,9 @@ c-coverage:
 	lcov --directory . --capture --gcov-tool=$(GCOV) -o generate.info
 	lcov --remove generate.info "/usr*" -o generate.info
 	genhtml -o test-coverage/C/ -t "generate test coverage" generate.info
+
+python-coverage-combine:
+	python3-coverage combine -a
 
 python-coverage:
 	python3-coverage html -d test-coverage/python --omit=/usr* || true
@@ -152,10 +179,10 @@ install: default
 %.html: %.md
 	pandoc -s --metadata title="Netplan reference" --toc -o $@ $<
 
-doc/netplan.5: doc/manpage-header.md doc/netplan-yaml.md doc/manpage-footer.md
+doc/netplan.5: doc/manpage-header.md doc/structure-id.md doc/netplan-yaml.md doc/manpage-footer.md
 	pandoc -s -o $@ --from=markdown-smart $^
 
 %.8: %.md
-	pandoc -s -o $@ --from=markdown-smart $^
+	pandoc -s -o $@ --shift-heading-level-by=-1 --from=markdown-smart $^
 
 .PHONY: clean

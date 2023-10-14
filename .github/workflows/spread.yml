@@ -1,0 +1,21 @@
+name: Run spread
+
+on:
+  push:
+    branches: [ main, 'stable/**' ]
+  pull_request:
+    branches: [ main, 'stable/**' ]
+
+jobs:
+  spread:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: canonical/setup-lxd@v0.1.1
+      - uses: actions/checkout@v2
+      - name: Install spread
+        run: |
+          go install github.com/snapcore/spread/cmd/spread@latest
+      - name: Run the spread test inside LXD
+        run: |
+          ~/go/bin/spread -v lxd:
+

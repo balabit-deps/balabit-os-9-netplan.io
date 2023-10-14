@@ -50,7 +50,7 @@ write_ovs_systemd_unit(const char* id, const GString* cmds, const char* rootdir,
     if (!cleanup) {
         g_string_append_printf(s, "After=netplan-ovs-cleanup.service\n");
     } else {
-        /* The netplan-ovs-cleanup unit shall not run on systems where openvswitch is not installed. */
+        /* The netplan-ovs-cleanup unit shall not run on systems where Open vSwitch is not installed. */
         g_string_append(s, "ConditionFileIsExecutable=" OPENVSWITCH_OVS_VSCTL "\n");
     }
     g_string_append(s, "Before=network.target\nWants=network.target\n");
@@ -171,7 +171,7 @@ write_ovs_bond_interfaces(const NetplanState* np_state, const NetplanNetDefiniti
     GString* patch_ports = g_string_new("");
 
     if (!def->bridge) {
-        g_set_error(error, G_MARKUP_ERROR, G_MARKUP_ERROR_INVALID_CONTENT, "Bond %s needs to be a slave of an OpenVSwitch bridge\n", def->id);
+        g_set_error(error, G_MARKUP_ERROR, G_MARKUP_ERROR_INVALID_CONTENT, "Bond %s needs to be a member of an OpenVSwitch bridge\n", def->id);
         return NULL;
     }
 
@@ -189,7 +189,7 @@ write_ovs_bond_interfaces(const NetplanState* np_state, const NetplanNetDefiniti
         }
     }
     if (i < 2) {
-        g_set_error(error, G_MARKUP_ERROR, G_MARKUP_ERROR_INVALID_CONTENT, "Bond %s needs to have at least 2 slave interfaces\n", def->id);
+        g_set_error(error, G_MARKUP_ERROR, G_MARKUP_ERROR_INVALID_CONTENT, "Bond %s needs to have at least 2 member interfaces\n", def->id);
         return NULL;
     }
 
@@ -221,7 +221,7 @@ write_ovs_bond_mode(const NetplanNetDefinition* def, GString* cmds, GError** err
         append_systemd_cmd(cmds, OPENVSWITCH_OVS_VSCTL " set Port %s bond_mode=%s", def->id, value);
         write_ovs_tag_setting(def->id, "Port", "bond_mode", NULL, value, cmds);
     } else {
-        g_set_error(error, G_MARKUP_ERROR, G_MARKUP_ERROR_INVALID_CONTENT, "%s: bond mode '%s' not supported by openvswitch\n",
+        g_set_error(error, G_MARKUP_ERROR, G_MARKUP_ERROR_INVALID_CONTENT, "%s: bond mode '%s' not supported by Open vSwitch\n",
                   def->id, def->bond_params.mode);
         return FALSE;
     }
@@ -274,7 +274,7 @@ check_ovs_ssl(const NetplanOVSSettings* settings, gchar* target, gboolean* needs
         /* Check if SSL is configured in settings->ssl */
         if (!settings->ssl.ca_certificate || !settings->ssl.client_certificate ||
             !settings->ssl.client_key) {
-            g_set_error(error, G_MARKUP_ERROR, G_MARKUP_ERROR_INVALID_CONTENT, "ERROR: openvswitch bridge controller target '%s' needs SSL configuration, but global 'openvswitch.ssl' settings are not set\n", target);
+            g_set_error(error, G_MARKUP_ERROR, G_MARKUP_ERROR_INVALID_CONTENT, "ERROR: Open vSwitch bridge controller target '%s' needs SSL configuration, but global 'openvswitch.ssl' settings are not set\n", target);
             return FALSE;
         }
         *needs_ssl = TRUE;
@@ -319,7 +319,7 @@ cleanup:
 gboolean
 netplan_netdef_write_ovs(const NetplanState* np_state, const NetplanNetDefinition* def, const char* rootdir, gboolean* has_been_written, GError** error)
 {
-    GString* cmds = g_string_new(NULL);
+    g_autoptr(GString) cmds = g_string_new(NULL);
     gchar* dependency = NULL;
     const char* type = netplan_type_to_table_name(def->type);
     g_autofree char* base_config_path = NULL;
@@ -371,7 +371,7 @@ netplan_netdef_write_ovs(const NetplanState* np_state, const NetplanNetDefinitio
                 /* Set controller target addresses */
                 if (def->ovs_settings.controller.addresses && def->ovs_settings.controller.addresses->len > 0) {
                     if (!write_ovs_bridge_controller_targets(settings, &(def->ovs_settings.controller), def->id, cmds, error))
-                            return FALSE;
+                        return FALSE;
 
                     /* Set controller connection mode, only applicable if at least one controller target address was set */
                     if (def->ovs_settings.controller.connection_mode) {
@@ -412,6 +412,7 @@ netplan_netdef_write_ovs(const NetplanState* np_state, const NetplanNetDefinitio
         }
 
         /* Try writing out a base config */
+        /* TODO: make use of netplan_netdef_get_output_filename() */
         base_config_path = g_strjoin(NULL, "run/systemd/network/10-netplan-", def->id, NULL);
         if (!netplan_netdef_write_network_file(np_state, def, rootdir, base_config_path, has_been_written, error))
             return FALSE;
@@ -425,7 +426,7 @@ netplan_netdef_write_ovs(const NetplanState* np_state, const NetplanNetDefinitio
                 return FALSE;
             }
         } else {
-            g_debug("openvswitch: definition %s is not for us (backend %i)", def->id, def->backend);
+            g_debug("Open vSwitch: definition %s is not for us (backend %i)", def->id, def->backend);
             SET_OPT_OUT_PTR(has_been_written, FALSE);
             return TRUE;
         }
@@ -449,7 +450,6 @@ netplan_netdef_write_ovs(const NetplanState* np_state, const NetplanNetDefinitio
     gboolean ret = TRUE;
     if (cmds->len > 0)
         ret = write_ovs_systemd_unit(def->id, cmds, rootdir, netplan_type_is_physical(def->type), FALSE, dependency, error);
-    g_string_free(cmds, TRUE);
     SET_OPT_OUT_PTR(has_been_written, TRUE);
     return ret;
 }

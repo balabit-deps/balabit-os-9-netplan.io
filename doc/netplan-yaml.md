@@ -2,85 +2,74 @@
 title: "YAML configuration"
 ---
 
-## Introduction
-Distribution installers, cloud instantiation, image builds for particular
-devices, or any other way to deploy an operating system put its desired
-network configuration into YAML configuration file(s). During
-early boot, the netplan "network renderer" runs which reads
-`/{lib,etc,run}/netplan/*.yaml` and writes configuration to `/run` to hand
-off control of devices to the specified networking daemon.
+## Top-level configuration structure
 
- - Configured devices get handled by systemd-networkd by default,
-   unless explicitly marked as managed by a specific renderer (NetworkManager)
- - Devices not covered by the network config do not get touched at all.
- - Usable in initramfs (few dependencies and fast)
- - No persistent generated config, only original YAML config
- - Parser supports multiple config files to allow applications like libvirt or
-   lxd to package up expected network config (`virbr0`, `lxdbr0`), or to change
-   the global default policy to use NetworkManager for everything.
- - Retains the flexibility to change backends/policy later or adjust to
-   removing NetworkManager, as generated configuration is ephemeral.
+The general structure of a Netplan YAML file is shown below.
 
-## General structure
-netplan's configuration files use the
-[YAML](http://yaml.org/spec/1.1/current.html) format. All
-`/{lib,etc,run}/netplan/*.yaml` are considered. Lexicographically later files
-(regardless of in which directory they are) amend (new mapping keys) or
-override (same mapping keys) previous ones. A file in `/run/netplan`
-completely shadows a file with same name in `/etc/netplan`, and a file in
-either of those directories shadows a file with the same name in `/lib/netplan`.
+```yaml
+network:
+  version: NUMBER
+  renderer: STRING
+  bonds: MAPPING
+  bridges: MAPPING
+  ethernets: MAPPING
+  modems: MAPPING
+  tunnels: MAPPING
+  vlans: MAPPING
+  vrfs: MAPPING
+  wifis: MAPPING
+  nm-devices: MAPPING
+```
 
-The top-level node in a netplan configuration file is a `network:` mapping
-that contains `version: 2` (the YAML currently being used by curtin, MaaS,
-etc. is version 1), and then device definitions grouped by their type, such as
-`ethernets:`, `modems:`, `wifis:`, or `bridges:`. These are the types that our
-renderer can understand and are supported by our backends.
+- **version** (number)
 
-Each type block contains device definitions as a map where the keys (called
-"configuration IDs") are defined as below.
+  > Defines what version of the configuration format is used. The only value supported is `2`. Defaults to `2` if not defined.
 
-## Device configuration IDs
-The key names below the per-device-type definition maps (like `ethernets:`)
-are called "ID"s. They must be unique throughout the entire set of
-configuration files. Their primary purpose is to serve as anchor names for
-composite devices, for example to enumerate the members of a bridge that is
-currently being defined.
+- **renderer** (scalar)
 
-(Since 0.97) If an interface is defined with an ID in a configuration file; it
-will be brought up by the applicable renderer. To not have netplan touch an
-interface at all, it should be completely omitted from the netplan configuration
-files.
+  > Defines what network configuration tool will be used to set up your configuration. Valid values are `networkd` and `NetworkManager`. Defaults to `networkd` if not defined.
 
-There are two physically/structurally different classes of device definitions,
-and the ID field has a different interpretation for each:
+- [**bonds**](#properties-for-device-type-bonds) (mapping)
 
-Physical devices
+  > Creates and configures link aggregation (bonding) devices.
 
-> (Examples: ethernet, modem, wifi) These can dynamically come and go between
-> reboots and even during runtime (hot plugging). In the generic case, they
-> can be selected by `match:` rules on desired properties, such as name/name
-> pattern, MAC address, driver, or device paths. In general these will match
-> any number of devices (unless they refer to properties which are unique
-> such as the full path or MAC address), so without further knowledge about
-> the  hardware these will always be considered as a group.
->
-> It is valid to specify no match rules at all, in which case the ID field is
-> simply the interface name to be matched. This is mostly useful if you want
-> to keep simple cases simple, and it's how network device configuration has
-> been done for a long time.
->
-> If there are ``match``: rules, then the ID field is a purely opaque name
-> which is only being used  for references from definitions of compound
-> devices in the config.
+- [**bridges**](#properties-for-device-type-bridges) (mapping)
 
-Virtual devices
+  > Creates and configures bridge devices.
 
-> (Examples: veth, bridge, bond, vrf) These are fully under the control of the
-> config file(s) and the network stack. I. e. these devices are being created
-> instead of matched. Thus `match:` and `set-name:` are not applicable for
-> these, and the ID field is the name of the created virtual device.
+- [**ethernets**](#properties-for-device-type-ethernets) (mapping)
 
-## Common properties for physical device types
+  > Configures physical Ethernet interfaces.
+
+- [**modems**](#properties-for-device-type-modems) (mapping)
+
+  > Configures modems
+
+- [**tunnels**](#properties-for-device-type-tunnels) (mapping)
+
+  > Creates and configures different types of virtual tunnels.
+
+- [**vlans**](#properties-for-device-type-vlans) (mapping)
+
+  > Creates and configures VLANs.
+
+- [**vrfs**](#properties-for-device-type-vrfs) (mapping)
+
+  > Configures Virtual Routing and Forwarding (VRF) devices.
+
+- [**wifis**](#properties-for-device-type-wifis) (mapping)
+
+  > Configures physical Wifi interfaces as client, adhoc or access point.
+
+- [**nm-devices**](#properties-for-device-type-nm-devices) (mapping)
+
+  > `nm-devices` are used in situations where Netplan doesn't support the connection type. The raw configuration expected by NetworkManager can be defined and will be passed as is (passthrough) to the `.nmconnection` file. Users will not normally use this type of device.
+
+All the properties for all the device types will be described in the next sections.
+
+## Properties for physical device types
+
+These properties are used with physical devices such as Ethernet and Wifi network interfaces.
 
 **Note:** Some options will not work reliably for devices matched by name only
 and rendered by networkd, due to interactions with device renaming in udev.
@@ -101,8 +90,9 @@ Match devices by MAC when setting options like: `wakeonlan` or `*-offload`.
 
   - **macaddress** (scalar)
 
-    > Device's 6-byte MAC address in the form "XX:XX:XX:XX:XX:XX" or 20 bytes
-    > for InfiniBand devices (IPoIB). Globs are not allowed.
+    > Device's 6-byte permanent MAC address in the form "XX:XX:XX:XX:XX:XX" or
+    > 20 bytes for InfiniBand devices (IPoIB). Globs are not allowed.
+    > This doesn't match virtual MAC addresses for veth, bridge, bond, vlan, ...
 
   - **driver** (scalar or sequence of scalars) – sequence since **0.104**
 
@@ -114,28 +104,40 @@ Match devices by MAC when setting options like: `wakeonlan` or `*-offload`.
 
   - All cards on second PCI bus:
     ```yaml
-    match:
-      name: enp2*
+    network:
+      ethernets:
+        myinterface:
+          match:
+            name: enp2*
     ```
 
   - Fixed MAC address:
     ```yaml
-    match:
-      macaddress: 11:22:33:AA:BB:FF
+    network:
+      ethernets:
+        interface0:
+          match:
+            macaddress: 11:22:33:AA:BB:FF
     ```
 
   - First card of driver ``ixgbe``:
     ```yaml
-    match:
-      driver: ixgbe
-      name: en*s0
+    network:
+      ethernets:
+        nic0:
+          match:
+            driver: ixgbe
+            name: en*s0
     ```
 
   - First card with a driver matching ``bcmgenet`` or ``smsc*``:
     ```yaml
-    match:
-      driver: ["bcmgenet", "smsc*"]
-      name: en*
+    network:
+      ethernets:
+        nic0:
+          match:
+            driver: ["bcmgenet", "smsc*"]
+            name: en*
     ```
 
 - **set-name** (scalar)
@@ -238,7 +240,7 @@ Match devices by MAC when setting options like: `wakeonlan` or `*-offload`.
     > Valid for bridge interfaces or the network section. List of protocols to
     > be used when negotiating a connection with the controller. Accepts
     > `OpenFlow10`, `OpenFlow11`, `OpenFlow12`, `OpenFlow13`, `OpenFlow14`,
-    > `OpenFlow15` and `OpenFlow16`.
+    > and `OpenFlow15`.
 
   - **rstp** (bool) – since **0.100**
 
@@ -282,14 +284,14 @@ Match devices by MAC when setting options like: `wakeonlan` or `*-offload`.
       > Path to a file containing the CA certificate to be used.
 
     - **certificate** (scalar)
- 
+
       > Path to a file containing the server certificate.
 
     - **private-key** (scalar)
 
       > Path to a file containing the private key for the server.
 
-## Common properties for all device types
+## Properties for all device types
 
 - **renderer** (scalar)
 
@@ -423,13 +425,14 @@ Match devices by MAC when setting options like: `wakeonlan` or `*-offload`.
   - Simple: ``addresses: [192.168.14.2/24, "2001:1::1/64"]``
   - Advanced:
     ```yaml
-    ethernets:
-      eth0:
-        addresses:
-          - "10.0.0.15/24":
-              lifetime: 0
-              label: "maas"
-          - "2001:1::1/64"
+    network:
+      ethernets:
+        eth0:
+          addresses:
+            - "10.0.0.15/24":
+                lifetime: 0
+                label: "maas"
+            - "2001:1::1/64"
     ```
 
 - **ipv6-address-generation** (scalar) – since **0.99**
@@ -468,12 +471,13 @@ Match devices by MAC when setting options like: `wakeonlan` or `*-offload`.
   Example:
 
   ```yaml
-  ethernets:
-    id0:
-      [...]
-      nameservers:
-        search: [lab, home]
-        addresses: [8.8.8.8, "FEDC::1"]
+  network:
+    ethernets:
+      id0:
+        [...]
+        nameservers:
+          search: [lab, home]
+          addresses: [8.8.8.8, "FEDC::1"]
   ```
 
 - **macaddress** (scalar)
@@ -488,12 +492,13 @@ Match devices by MAC when setting options like: `wakeonlan` or `*-offload`.
   Example:
 
   ```yaml
-  ethernets:
-    id0:
-      match:
-        macaddress: 52:54:00:6b:3c:58
-      [...]
-      macaddress: 52:54:00:6b:3c:59
+  network:
+    ethernets:
+      id0:
+        match:
+          macaddress: 52:54:00:6b:3c:58
+        [...]
+        macaddress: 52:54:00:6b:3c:59
   ```
 
 - **mtu** (scalar)
@@ -515,12 +520,13 @@ Match devices by MAC when setting options like: `wakeonlan` or `*-offload`.
   Example:
 
   ```yaml
-  ethernets:
-    eth7:
-      # this is plugged into a test network that is often
-      # down - don't wait for it to come up during boot.
-      dhcp4: true
-      optional: true
+  network:
+    ethernets:
+      eth7:
+        # this is plugged into a test network that is often
+        # down - don't wait for it to come up during boot.
+        dhcp4: true
+        optional: true
   ```
 
 - **optional-addresses** (sequence of scalars)
@@ -534,11 +540,12 @@ Match devices by MAC when setting options like: `wakeonlan` or `*-offload`.
   Example:
 
   ```yaml
-  ethernets:
-    eth7:
-      dhcp4: true
-      dhcp6: true
-      optional-addresses: [ ipv4-ll, dhcp6 ]
+  network:
+    ethernets:
+      eth7:
+        dhcp4: true
+        dhcp6: true
+        optional-addresses: [ ipv4-ll, dhcp6 ]
   ```
 
 - **activation-mode** (scalar) – since **0.103**
@@ -555,11 +562,12 @@ Match devices by MAC when setting options like: `wakeonlan` or `*-offload`.
   Example:
 
   ```yaml
-  ethernets:
-    eth1:
-      # this interface will not be put into an UP state automatically
-      dhcp4: true
-      activation-mode: manual
+  network:
+    ethernets:
+      eth1:
+        # this interface will not be put into an UP state automatically
+        dhcp4: true
+        activation-mode: manual
   ```
 
 - **routes** (sequence of mappings)
@@ -680,24 +688,26 @@ reach the wider Internet. Those default routes can only defined once per IP
 family and routing table. A typical example would look like the following:
 
 ```yaml
-eth0:
-  [...]
-  routes:
-    - to: default # could be 0/0 or 0.0.0.0/0 optionally
-      via: 10.0.0.1
-      metric: 100
-      on-link: true
-    - to: default # could be ::/0 optionally
-      via: cf02:de:ad:be:ef::2
-eth1:
-  [...]
-  routes:
-    - to: default
-      via: 172.134.67.1
-      metric: 100
-      on-link: true
-      # Not on the main routing table,
-      # does not conflict with the eth0 default route
+network:
+  ethernets:
+    eth0:
+      [...]
+      routes:
+        - to: default # could be 0.0.0.0/0 optionally
+          via: 10.0.0.1
+          metric: 100
+          on-link: true
+        - to: default # could be ::/0 optionally
+          via: cf02:de:ad:be:ef::2
+    eth1:
+      [...]
+      routes:
+        - to: default
+          via: 172.134.67.1
+          metric: 100
+          on-link: true
+          # Not on the main routing table,
+          # does not conflict with the eth0 default route
       table: 76
 ```
 
@@ -745,7 +755,7 @@ eth1:
   - **scope** (scalar)
 
     > The route scope, how wide-ranging it is to the network. Possible
-    > values are "global", "link", or "host".
+    > values are "global", "link", or "host". Applies to IPv4 only.
 
   - **table** (scalar)
 
@@ -880,6 +890,50 @@ interfaces, as well as individual wifi networks, by means of the `auth` block.
 
 
 ## Properties for device type `ethernets:`
+
+**Status**: Optional.
+
+**Purpose**: Use the `ethernets` key to configure Ethernet interfaces.
+
+**Structure**: The key consists of a mapping of Ethernet interface IDs. Each
+`ethernet` has a number of configuration options. You don't need to define each
+interface by their name inside the `ethernets` mapping. You can use any ID that
+describes the interface and match the actual network card using the `match` key.
+The general configuration structure for Ethernets is shown below.
+
+
+```yaml
+network:
+  ethernets:
+    device-id:
+      ...
+```
+
+`device-id` is the interface identifier. If you use the interface name as the ID, Netplan will match that interface.
+
+Consider the example below. In this case, an interface called `eth0` will be configured with DHCP.
+
+```yaml
+network:
+  ethernets:
+    eth0:
+      dhcp4: true
+```
+
+The `device-id` can be any descriptive name your find meaningful. Although, if it doesn't match a real interface name, you must use the property `match` to identify the device you want to configure.
+
+The example below defines an Ethernet connection called `isp-interface` (supposedly an external interface connected to the Internet Service Provider) and uses `match` to apply the configuration to the physical device with MAC address `aa:bb:cc:00:11:22`.
+
+```yaml
+network:
+  ethernets:
+    isp-interface:
+      match:
+        macaddress: aa:bb:cc:00:11:22
+      dhcp4: true
+```
+
+
 Ethernet device definitions, beyond common ones described above, also support
 some additional properties that can be used for SR-IOV devices.
 
@@ -892,10 +946,11 @@ some additional properties that can be used for SR-IOV devices.
   Example:
 
   ```yaml
-  ethernets:
-    enp1: {...}
-    enp1s16f1:
-      link: enp1
+  network:
+    ethernets:
+      enp1: {...}
+      enp1s16f1:
+        link: enp1
   ```
 
 - **virtual-function-count** (scalar) – since **0.99**
@@ -935,8 +990,34 @@ some additional properties that can be used for SR-IOV devices.
   > **Requires feature: infiniband**
 
 ## Properties for device type `modems:`
-GSM/CDMA modem configuration is only supported for the `NetworkManager`
-backend. `systemd-networkd` does not support modems.
+
+**Status**: Optional.
+
+**Purpose**: Use the `modems` key to configure Modem interfaces. GSM/CDMA modem
+configuration is only supported for the `NetworkManager` backend.
+`systemd-networkd` does not support modems.
+
+**Structure**: The key consists of a mapping of Modem IDs. Each `modem` has a
+number of configuration options. The general configuration structure for Modems
+is shown below.
+
+```yaml
+network:
+  version: 2
+  renderer: NetworkManager
+  modems:
+    cdc-wdm1:
+      mtu: 1600
+      apn: ISP.CINGULAR
+      username: ISP@CINGULARGPRS.COM
+      password: CINGULAR1
+      number: "*99#"
+      network-id: 24005
+      device-id: da812de91eec16620b06cd0ca5cbc7ea25245222
+      pin: 2345
+      sim-id: 89148000000060671234
+      sim-operator-id: 310260
+```
 
 **Requires feature: modems**
 
@@ -995,6 +1076,25 @@ backend. `systemd-networkd` does not support modems.
   > can be omitted if `auto-config` is enabled.
 
 ## Properties for device type `wifis:`
+
+**Status**: Optional.
+
+**Purpose**: Use the `wifis` key to configure WiFi access points.
+
+**Structure**: The key consists of a mapping of WiFi IDs. Each `wifi` has a
+number of configuration options. The general configuration structure for WiFis
+is shown below.
+
+```yaml
+network:
+  version: 2
+  wifis:
+    wlp0s1:
+      access-points:
+        "network_ssid_name":
+          password: "**********"
+```
+
 Note that `systemd-networkd` does not natively support wifi, so you need
 wpasupplicant installed if you let the `networkd` renderer handle wifi.
 
@@ -1007,7 +1107,7 @@ wpasupplicant installed if you let the `networkd` renderer handle wifi.
 
   - **password** (scalar)
 
-    > Enable WPA2 authentication and set the passphrase for it. If neither
+    > Enable WPA/WPA2 authentication and set the passphrase for it. If neither
     > this nor an `auth` block are given, the network is assumed to be
     > open. The setting
     > ```yaml
@@ -1046,7 +1146,7 @@ wpasupplicant installed if you let the `networkd` renderer handle wifi.
 
   - **hidden** (bool) – since **0.100**
 
-    > Set to `true` to change the SSID scan technique for connecting to 
+    > Set to `true` to change the SSID scan technique for connecting to
     > hidden WiFi networks. Note this may have slower performance compared
     > to `false` (the default) when connecting to publicly broadcast
     > SSIDs.
@@ -1072,6 +1172,31 @@ wpasupplicant installed if you let the `networkd` renderer handle wifi.
 
 ## Properties for device type `bridges:`
 
+**Status**: Optional.
+
+**Purpose**: Use the `bridges` key to create Bridge interfaces.
+
+**Structure**: The key consists of a mapping of Bridge interface names. Each
+`bridge` has an optional list of interfaces that will be bridged together. The
+interfaces listed in the `interfaces` key (`enp5s0` and `enp5s1` below) must
+also be defined in your Netplan configuration. The general configuration
+structure for Bridges is shown below.
+
+```yaml
+network:
+  bridges:
+    br0:
+      interfaces:
+        - enp5s0
+        - enp5s1
+      dhcp4: true
+      ...
+```
+
+When applied, a virtual interface of type bridge called `br0` will be created in the system.
+
+The specific settings for bridges are defined below.
+
 - **interfaces** (sequence of scalars)
 
   > All devices matching this ID list will be added to the bridge. This may
@@ -1081,13 +1206,14 @@ wpasupplicant installed if you let the `networkd` renderer handle wifi.
   Example:
 
   ```yaml
-  ethernets:
-    switchports:
-      match: {name: "enp2*"}
-  [...]
-  bridges:
-    br0:
-      interfaces: [switchports]
+  network:
+    ethernets:
+      switchports:
+        match: {name: "enp2*"}
+    [...]
+    bridges:
+      br0:
+        interfaces: [switchports]
   ```
 
 - **parameters** (mapping)
@@ -1112,11 +1238,29 @@ wpasupplicant installed if you let the `networkd` renderer handle wifi.
     > priority. The bridge with the higher priority will be elected as
     > the root bridge.
 
-  - **port-priority** (scalar)
+  - **port-priority** (mapping)
 
-    > Set the port priority to <priority>. The priority value is
+    > Set the port priority per interface. The priority value is
     > a number between `0` and `63`. This metric is used in the
     > designated port and root port selection algorithms.
+
+    Example:
+
+    ```yaml
+    network:
+      ethernets:
+        eth0:
+          dhcp4: false
+        eth1:
+          dhcp4: false
+      bridges:
+        br0:
+          interfaces: [eth0, eth1]
+          parameters:
+            port-priority:
+              eth0: 10
+              eth1: 20
+    ```
 
   - **forward-delay** (scalar)
 
@@ -1142,11 +1286,29 @@ wpasupplicant installed if you let the `networkd` renderer handle wifi.
     > renderer is used. If no time suffix is specified, the value will be
     > interpreted as seconds.
 
-  - **path-cost** (scalar)
+  - **path-cost** (mapping)
 
-    > Set the cost of a path on the bridge. Faster interfaces should have
-    > a lower cost. This allows a finer control on the network topology
-    > so that the fastest paths are available whenever possible.
+    > Set the per-interface cost of a path on the bridge. Faster interfaces
+    > should have a lower cost. This allows a finer control on the network
+    > topology so that the fastest paths are available whenever possible.
+
+    Example:
+
+    ```yaml
+    network:
+      ethernets:
+        eth0:
+          dhcp4: false
+        eth1:
+          dhcp4: false
+      bridges:
+        br0:
+          interfaces: [eth0, eth1]
+          parameters:
+            path-cost:
+              eth0: 100
+              eth1: 200
+    ```
 
   - **stp** (bool)
 
@@ -1157,6 +1319,33 @@ wpasupplicant installed if you let the `networkd` renderer handle wifi.
 
 ## Properties for device type `bonds:`
 
+**Status**: Optional.
+
+**Purpose**: Use the `bonds` key to create Bond (Link Aggregation) interfaces.
+
+**Structure**: The key consists of a mapping of Bond interface names. Each
+`bond` has an optional list of interfaces that will be part of the aggregation.
+The interfaces listed in the `interfaces` key must also be defined in your
+Netplan configuration. The general configuration structure for Bonds is shown
+below.
+
+```yaml
+network:
+  bonds:
+    bond0:
+      interfaces:
+        - enp5s0
+        - enp5s1
+        - enp5s2
+      mode: active-backup
+      ...
+```
+
+When applied, a virtual interface of type bond called `bond0` will be created in the system.
+
+The specific settings for bonds are defined below.
+
+
 - **interfaces** (sequence of scalars)
 
   > All devices matching this ID list will be added to the bond.
@@ -1164,13 +1353,14 @@ wpasupplicant installed if you let the `networkd` renderer handle wifi.
   Example:
 
   ```yaml
-  ethernets:
-    switchports:
-      match: {name: "enp2*"}
-  [...]
-  bonds:
-    bond0:
-      interfaces: [switchports]
+  network:
+    ethernets:
+      switchports:
+        match: {name: "enp2*"}
+    [...]
+    bonds:
+      bond0:
+        interfaces: [switchports]
   ```
 
 - **parameters** (mapping)
@@ -1211,7 +1401,7 @@ wpasupplicant installed if you let the `networkd` renderer handle wifi.
 
   - **transmit-hash-policy** (scalar)
 
-    > Specifies the transmit hash policy for the selection of slaves. This
+    > Specifies the transmit hash policy for the selection of ports. This
     > is only useful in balance-xor, 802.3ad and balance-tlb modes.
     > Possible values are `layer2`, `layer3+4`, `layer2+3`,
     > `encap2+3`, and `encap3+4`.
@@ -1222,12 +1412,14 @@ wpasupplicant installed if you let the `networkd` renderer handle wifi.
     > `bandwidth`, and `count`. This option is only used in 802.3ad
     > mode.
 
-  - **all-slaves-active** (bool)
+  - **all-members-active** (bool) – since **0.106**
 
     > If the bond should drop duplicate frames received on inactive ports,
     > set this option to `false`. If they should be delivered, set this
     > option to `true`. The default value is false, and is the desirable
     > behavior in most situations.
+    >
+    > Alias: **all-slaves-active**  <!--- wokeignore:rule=slave -->
 
   - **arp-interval** (scalar)
 
@@ -1240,7 +1432,7 @@ wpasupplicant installed if you let the `networkd` renderer handle wifi.
   - **arp-ip-targets** (sequence of scalars)
 
     > IPs of other hosts on the link which should be sent ARP requests in
-    > order to validate that a slave is up. This option is only used when
+    > order to validate that a port is up. This option is only used when
     > `arp-interval` is set to a value other than `0`. At least one IP
     > address must be given for ARP link monitoring to function. Only IPv4
     > addresses are supported. You can specify up to 16 IP addresses. The
@@ -1255,7 +1447,7 @@ wpasupplicant installed if you let the `networkd` renderer handle wifi.
   - **arp-all-targets** (scalar)
 
     > Specify whether to use any ARP IP target being up as sufficient for
-    > a slave to be considered up; or if all the targets must be up. This
+    > a port to be considered up; or if all the targets must be up. This
     > is only used for `active-backup` mode when `arp-validate` is
     > enabled. Possible values are `any` and `all`.
 
@@ -1277,14 +1469,14 @@ wpasupplicant installed if you let the `networkd` renderer handle wifi.
 
   - **fail-over-mac-policy** (scalar)
 
-    > Set whether to set all slaves to the same MAC address when adding
+    > Set whether to set all ports to the same MAC address when adding
     > them to the bond, or how else the system should handle MAC addresses.
     > The possible values are `none`, `active`, and `follow`.
 
   - **gratuitous-arp** (scalar)
 
     > Specify how many ARP packets to send after failover. Once a link is
-    > up on a new slave, a notification is sent and possibly repeated if
+    > up on a new port, a notification is sent and possibly repeated if
     > this value is set to a number greater than `1`. The default value
     > is `1` and valid values are between `1` and `255`. This only
     > affects `active-backup` mode.
@@ -1292,26 +1484,28 @@ wpasupplicant installed if you let the `networkd` renderer handle wifi.
     > For historical reasons, the misspelling `gratuitious-arp` is also
     > accepted and has the same function.
 
-  - **packets-per-slave** (scalar)
+  - **packets-per-member** (scalar) – since **0.106**
 
     > In `balance-rr` mode, specifies the number of packets to transmit
-    > on a slave before switching to the next. When this value is set to
-    > `0`, slaves are chosen at random. Allowable values are between
+    > on a port before switching to the next. When this value is set to
+    > `0`, ports are chosen at random. Allowable values are between
     > `0` and `65535`. The default value is `1`. This setting is
     > only used in `balance-rr` mode.
+    >
+    > Alias: **packets-per-slave** <!--- wokeignore:rule=slave -->
 
   - **primary-reselect-policy** (scalar)
 
-    > Set the reselection policy for the primary slave. On failure of the
-    > active slave, the system will use this policy to decide how the new
-    > active slave will be chosen and how recovery will be handled. The
+    > Set the reselection policy for the primary port. On failure of the
+    > active port, the system will use this policy to decide how the new
+    > active port will be chosen and how recovery will be handled. The
     > possible values are `always`, `better`, and `failure`.
 
   - **resend-igmp** (scalar)
 
     > In modes `balance-rr`, `active-backup`, `balance-tlb` and
     > `balance-alb`, a failover can switch IGMP traffic from one
-    > slave to another.
+    > port to another.
     >
     > This parameter specifies how many IGMP membership reports
     > are issued on a failover event. Values range from 0 to 255. 0
@@ -1322,7 +1516,7 @@ wpasupplicant installed if you let the `networkd` renderer handle wifi.
   - **learn-packet-interval** (scalar)
 
     > Specify the interval between sending learning packets to
-    > each slave.  The value range is between `1` and `0x7fffffff`.
+    > each port.  The value range is between `1` and `0x7fffffff`.
     > The default value is `1`. This option only affects `balance-tlb`
     > and `balance-alb` modes. Using the networkd renderer, this field
     > maps to the LearnPacketIntervalSec= property. If no time suffix is
@@ -1330,13 +1524,32 @@ wpasupplicant installed if you let the `networkd` renderer handle wifi.
 
   - **primary** (scalar)
 
-    > Specify a device to be used as a primary slave, or preferred device
-    > to use as a slave for the bond (i.e. the preferred device to send
+    > Specify a device to be used as a primary port, or preferred device
+    > to use as a port for the bond (i.e. the preferred device to send
     > data through), whenever it is available. This only affects
     > `active-backup`, `balance-alb`, and `balance-tlb` modes.
 
 
 ## Properties for device type `tunnels:`
+
+**Status**: Optional.
+
+**Purpose**: Use the `tunnels` key to create virtual tunnel interfaces.
+
+**Structure**: The key consists of a mapping of tunnel interface names. Each
+`tunnel` requires the identification of the tunnel mode (see the section `mode`
+below for the list of supported modes). The general configuration structure for
+Tunnels is shown below.
+
+```yaml
+network:
+  tunnels:
+    tunnel0:
+      mode: SCALAR
+      ...
+```
+
+When applied, a virtual interface called `tunnel0` will be created in the system. Its operation mode is defined by the property `mode`.
 
 Tunnels allow traffic to pass as if it was between systems on the same local
 network, although systems may be far from each other but reachable via the
@@ -1344,6 +1557,9 @@ Internet. They may be used to support IPv6 traffic on a network where the ISP
 does not provide the service, or to extend and "connect" separate local
 networks. Please see <https://en.wikipedia.org/wiki/Tunneling_protocol> for
 more general information about tunnels.
+
+The specific settings for tunnels are defined below.
+
 
 - **mode** (scalar)
 
@@ -1404,46 +1620,50 @@ more general information about tunnels.
   Examples:
 
   ```yaml
-  tunnels:
-    tun0:
-      mode: gre
-      local: ...
-      remote: ...
-      keys:
-        input: 1234
-        output: 5678
+  network:
+    tunnels:
+      tun0:
+        mode: gre
+        local: ...
+        remote: ...
+        keys:
+          input: 1234
+          output: 5678
   ```
   ```yaml
-  tunnels:
-    tun0:
-      mode: vti6
-      local: ...
-      remote: ...
-      key: 59568549
+  network:
+    tunnels:
+      tun0:
+        mode: vti6
+        local: ...
+        remote: ...
+        key: 59568549
   ```
   ```yaml
-  tunnels:
-    wg0:
-      mode: wireguard
-      addresses: [...]
-      peers:
-        - keys:
-            public: rlbInAj0qV69CysWPQY7KEBnKxpYCpaWqOs/dLevdWc=
-            shared: /path/to/shared.key
-          ...
-      key: mNb7OIIXTdgW4khM7OFlzJ+UPs7lmcWHV7xjPgakMkQ=
+  network:
+    tunnels:
+      wg0:
+        mode: wireguard
+        addresses: [...]
+        peers:
+          - keys:
+              public: rlbInAj0qV69CysWPQY7KEBnKxpYCpaWqOs/dLevdWc=
+              shared: /path/to/shared.key
+            ...
+        key: mNb7OIIXTdgW4khM7OFlzJ+UPs7lmcWHV7xjPgakMkQ=
   ```
   ```yaml
-  tunnels:
-    wg0:
-      mode: wireguard
-      addresses: [...]
-      peers:
-        - keys:
-            public: rlbInAj0qV69CysWPQY7KEBnKxpYCpaWqOs/dLevdWc=
-          ...
-      keys:
-        private: /path/to/priv.key
+  network:
+    tunnels:
+      wg0:
+        mode: wireguard
+        addresses: [...]
+        peers:
+          - keys:
+              public: rlbInAj0qV69CysWPQY7KEBnKxpYCpaWqOs/dLevdWc=
+            ...
+        keys:
+          private: /path/to/priv.key
   ```
 
 
@@ -1465,24 +1685,25 @@ WireGuard specific keys:
   Example:
 
   ```yaml
-  tunnels:
-    wg0:
-      mode: wireguard
-      key: /path/to/private.key
-      mark: 42
-      port: 5182
-      peers:
-        - keys:
-            public: rlbInAj0qV69CysWPQY7KEBnKxpYCpaWqOs/dLevdWc=
-          allowed-ips: [0.0.0.0/0, "2001:fe:ad:de:ad:be:ef:1/24"]
-          keepalive: 23
-          endpoint: 1.2.3.4:5
-        - keys:
-            public: M9nt4YujIOmNrRmpIRTmYSfMdrpvE7u6WkG8FY8WjG4=
-            shared: /some/shared.key
-          allowed-ips: [10.10.10.20/24]
-          keepalive: 22
-          endpoint: 5.4.3.2:1
+  network:
+    tunnels:
+      wg0:
+        mode: wireguard
+        key: /path/to/private.key
+        mark: 42
+        port: 5182
+        peers:
+          - keys:
+              public: rlbInAj0qV69CysWPQY7KEBnKxpYCpaWqOs/dLevdWc=
+            allowed-ips: [0.0.0.0/0, "2001:fe:ad:de:ad:be:ef:1/24"]
+            keepalive: 23
+            endpoint: 1.2.3.4:5
+          - keys:
+              public: M9nt4YujIOmNrRmpIRTmYSfMdrpvE7u6WkG8FY8WjG4=
+              shared: /some/shared.key
+            allowed-ips: [10.10.10.20/24]
+            keepalive: 22
+            endpoint: 5.4.3.2:1
   ```
 
   - **endpoint** (scalar) – since **0.100**
@@ -1544,7 +1765,7 @@ VXLAN specific keys:
 
 - **ageing**, **aging** (scalar) – since **0.105**
 
-  > The lifetime of Forwarding Database entry learnt by the kernel, in
+  > The lifetime of Forwarding Database entry learned by the kernel, in
   > seconds.
 
 - **limit** (scalar) – since **0.105**
@@ -1603,6 +1824,26 @@ VXLAN specific keys:
 
 ## Properties for device type `vlans:`
 
+**Status**: Optional.
+
+**Purpose**: Use the `vlans` key to create VLAN interfaces.
+
+**Structure**: The key consists of a mapping of VLAN interface names. The
+interface used in the `link` option (`enp5s0` in the example below) must also be
+defined in the Netplan configuration. The general configuration structure for
+Vlans is shown below.
+
+```yaml
+network:
+  vlans:
+    vlan123:
+      id: 123
+      link: enp5s0
+      dhcp4: yes
+```
+
+The specific settings for VLANs are defined below.
+
 - **id** (scalar)
 
   > VLAN ID, a number between `0` and `4094`.
@@ -1615,20 +1856,46 @@ VXLAN specific keys:
 Example:
 
 ```yaml
-ethernets:
-  eno1: {...}
-vlans:
-  en-intra:
-    id: 1
-    link: eno1
-    dhcp4: yes
-  en-vpn:
-    id: 2
-    link: eno1
-    addresses: [...]
+network:
+  ethernets:
+    eno1: {...}
+  vlans:
+    en-intra:
+      id: 1
+      link: eno1
+      dhcp4: yes
+    en-vpn:
+      id: 2
+      link: eno1
+      addresses: [...]
 ```
 
 ## Properties for device type `vrfs:`
+
+**Status**: Optional.
+
+**Purpose**: Use the `vrfs` key to create Virtual Routing and Forwarding (VRF)
+interfaces.
+
+**Structure**: The key consists of a mapping of VRF interface names. The
+interface used in the `link` option (`enp5s0` in the example below) must also be
+defined in the Netplan configuration. The general configuration structure for
+VRFs is shown below.
+
+```yaml
+network:
+  renderer: networkd
+  vrfs:
+    vrf1:
+      table: 1
+      interfaces:
+        - enp5s0
+      routes:
+        - to: default
+          via: 10.10.10.4
+      routing-policy:
+        - from: 10.10.10.42
+```
 
 - **table** (scalar) – since **0.105**
 
@@ -1636,8 +1903,8 @@ vlans:
 
 - **interfaces** (sequence of scalars) – since **0.105**
 
-  > All devices matching this ID list will be added to the vrf. This may
-  > be an empty list, in which case the vrf will be brought online with
+  > All devices matching this ID list will be added to the VRF. This may
+  > be an empty list, in which case the VRF will be brought online with
   > no member interfaces.
 
 - **routes** (sequence of mappings) – since **0.105**
@@ -1653,16 +1920,17 @@ vlans:
 Example:
 
 ```yaml
-vrfs:
-  vrf20:
-    table: 20
-    interfaces: [ br0 ]
-    routes:
-      - to: default
-        via: 10.10.10.3
-    routing-policy:
-      - from: 10.10.10.42
-  [...]
+network:
+  vrfs:
+    vrf20:
+      table: 20
+      interfaces: [ br0 ]
+      routes:
+        - to: default
+          via: 10.10.10.3
+      routing-policy:
+        - from: 10.10.10.42
+    [...]
   bridges:
     br0:
       interfaces: []
@@ -1670,10 +1938,37 @@ vrfs:
 
 ## Properties for device type `nm-devices:`
 
-The `nm-devices` device type is for internal use only and should not be used in
-normal configuration files. It enables a fallback mode for unsupported settings,
-using the `passthrough` mapping.
+**Status**: Optional. Its use is not recommended.
 
+**Purpose**: Use the `nm-devices` key to configure device types that are not
+supported by Netplan. This is NetworkManager specific configuration.
+
+**Structure**: The key consists of a mapping of NetworkManager connections. The
+`nm-devices` device type is for internal use only and should not be used in
+normal configuration files. It enables a fallback mode for unsupported settings,
+using the `passthrough` mapping. The general configuration structure for NM
+connections is shown below.
+
+```yaml
+network:
+  version: 2
+  nm-devices:
+    NM-db5f0f67-1f4c-4d59-8ab8-3d278389cf87:
+      renderer: NetworkManager
+      networkmanager:
+        uuid: "db5f0f67-1f4c-4d59-8ab8-3d278389cf87"
+        name: "myvpnconnection"
+        passthrough:
+          connection.type: "vpn"
+          vpn.ca: "path to ca.crt"
+          vpn.cert: "path to client.crt"
+          vpn.cipher: "AES-256-GCM"
+          vpn.connection-type: "tls"
+          vpn.dev: "tun"
+          vpn.key: "path to client.key"
+          vpn.remote: "1.2.3.4:1194"
+          vpn.service-type: "org.freedesktop.NetworkManager.openvpn"
+```
 
 ## Backend-specific configuration parameters
 

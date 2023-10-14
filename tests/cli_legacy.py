@@ -1,5 +1,5 @@
 #!/usr/bin/python3
-# Blackbox tests of netplan CLI. These are run during "make check" and don't
+# Functional tests of netplan CLI. These are run during "make check" and don't
 # touch the system configuration at all.
 #
 # Copyright (C) 2016 Canonical, Ltd.
@@ -88,12 +88,16 @@ class TestGenerate(unittest.TestCase):
     def test_with_empty_config(self):
         c = os.path.join(self.workdir.name, 'etc', 'netplan')
         os.makedirs(c)
-        open(os.path.join(c, 'a.yaml'), 'w').close()
-        with open(os.path.join(c, 'b.yaml'), 'w') as f:
+        path_a = os.path.join(c, 'a.yaml')
+        path_b = os.path.join(c, 'b.yaml')
+        open(path_a, 'w').close()
+        with open(path_b, 'w') as f:
             f.write('''network:
   version: 2
   ethernets:
     enlol: {dhcp4: yes}''')
+        os.chmod(path_a, mode=0o600)
+        os.chmod(path_b, mode=0o600)
         out = subprocess.check_output(exe_cli + ['generate', '--root-dir', self.workdir.name], stderr=subprocess.STDOUT)
         self.assertEqual(out, b'')
         self.assertEqual(os.listdir(os.path.join(self.workdir.name, 'run', 'systemd', 'network')),
@@ -783,6 +787,25 @@ class TestIp(unittest.TestCase):
         (out, err) = p.communicate()
         self.assertEqual(out, b'')
         self.assertIn(b'No lease found', err)
+        self.assertNotEqual(p.returncode, 0)
+
+    def test_ip_leases_no_netdefs(self):
+        os.environ.setdefault('NETPLAN_GENERATE_PATH', os.path.join(rootdir, 'generate'))
+
+        c = os.path.join(self.workdir.name, 'etc', 'netplan')
+        os.makedirs(c)
+        with open(os.path.join(c, 'a.yaml'), 'w') as f:
+            f.write('''network:
+  version: 2
+  renderer: NetworkManager
+''')
+        # we didn't create a (mock) lease file, therefore expect stderr output
+        p = subprocess.Popen(exe_cli +
+                             ['ip', 'leases', '--root-dir', self.workdir.name, 'enlol'],
+                             stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        (out, err) = p.communicate()
+        self.assertEqual(out, b'')
+        self.assertIn(b"No lease found for interface 'enlol' (not managed by Netplan)", err)
         self.assertNotEqual(p.returncode, 0)
 
 

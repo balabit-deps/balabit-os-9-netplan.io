@@ -1,5 +1,5 @@
 #!/usr/bin/python3
-# Blackbox tests of certain libnetplan functions. These are run during
+# Functional tests of certain libnetplan functions. These are run during
 # "make check" and don't touch the system configuration at all.
 #
 # Copyright (C) 2020-2021 Canonical, Ltd.
@@ -28,6 +28,7 @@ from parser.base import capture_stderr
 from tests.test_utils import MockCmd
 
 from utils import state_from_yaml
+from netplan.cli.commands.set import FALLBACK_FILENAME
 
 import netplan.libnetplan as libnetplan
 
@@ -100,6 +101,7 @@ class TestRawLibnetplan(TestBase):
         # Parse all YAML and delete 'some-netplan-id' connection file
         self.assertTrue(lib.netplan_delete_connection('some-netplan-id'.encode(), self.workdir.name.encode()))
         self.assertFalse(os.path.isfile(orig))
+        self.assertFalse(os.path.isfile(os.path.join(self.confdir, FALLBACK_FILENAME)))
 
     def test_delete_connection_id_not_found(self):
         orig = os.path.join(self.confdir, 'some-filename.yaml')
@@ -131,6 +133,16 @@ class TestRawLibnetplan(TestBase):
         # Verify the file still exists and still contains the other connection
         with open(orig, 'r') as f:
             self.assertEqual(f.read(), 'network:\n  version: 2\n  ethernets:\n    other-id:\n      dhcp6: true\n')
+
+    def test_delete_connection_invalid(self):
+        orig = os.path.join(self.confdir, 'some-filename.yaml')
+        with open(orig, 'w') as f:
+            f.write('INVALID')
+        self.assertTrue(os.path.isfile(orig))
+        with capture_stderr() as outf:
+            self.assertFalse(lib.netplan_delete_connection('some-netplan-id'.encode(), self.workdir.name.encode()))
+            with open(outf.name, 'r') as f:
+                self.assertIn('Cannot parse input', f.read())
 
     def test_write_netplan_conf(self):
         netdef_id = 'some-netplan-id'
@@ -364,6 +376,70 @@ class TestNetDefinition(TestBase):
         netdef = state['eth0']
         self.assertEqual(os.path.join(self.confdir, "a.yaml"), netdef.filepath)
 
+    def test_filepath_for_ovs_ports(self):
+        state = state_from_yaml(self.confdir, '''network:
+  version: 2
+  renderer: networkd
+  bridges:
+    br0:
+      interfaces:
+        - patch0-2
+    br1:
+      interfaces:
+        - patch2-0
+  openvswitch:
+    ports:
+      - [patch0-2, patch2-0]''', filename="a.yaml")
+        netdef_port1 = state["patch2-0"]
+        netdef_port2 = state["patch0-2"]
+        self.assertEqual(os.path.join(self.confdir, "a.yaml"), netdef_port1.filepath)
+        self.assertEqual(os.path.join(self.confdir, "a.yaml"), netdef_port2.filepath)
+
+    def test_filepath_for_ovs_ports_when_conf_is_redefined(self):
+        state = libnetplan.State()
+        parser = libnetplan.Parser()
+
+        with tempfile.NamedTemporaryFile() as f:
+            f.write(b'''network:
+  version: 2
+  renderer: networkd
+  bridges:
+    br0:
+      interfaces:
+        - patch0-2
+    br1:
+      interfaces:
+        - patch2-0
+  openvswitch:
+    ports:
+      - [patch0-2, patch2-0]''')
+            f.flush()
+            parser.load_yaml(f.name)
+
+        with tempfile.NamedTemporaryFile() as f:
+            f.write(b'''network:
+  version: 2
+  renderer: networkd
+  bridges:
+    br0:
+      interfaces:
+        - patch0-2
+    br1:
+      interfaces:
+        - patch2-0
+  openvswitch:
+    ports:
+      - [patch0-2, patch2-0]''')
+            f.flush()
+            parser.load_yaml(f.name)
+            yaml_redefinition_filepath = f.name
+
+        state.import_parser_results(parser)
+        netdef_port1 = state["patch2-0"]
+        netdef_port2 = state["patch0-2"]
+        self.assertEqual(os.path.join(self.confdir, yaml_redefinition_filepath), netdef_port1.filepath)
+        self.assertEqual(os.path.join(self.confdir, yaml_redefinition_filepath), netdef_port2.filepath)
+
     def test_set_name(self):
         state = state_from_yaml(self.confdir, '''network:
   ethernets:
@@ -431,6 +507,69 @@ class TestNetDefinition(TestBase):
         self.assertFalse(state['eth0'].is_trivial_compound_itf)
         self.assertTrue(state['br0'].is_trivial_compound_itf)
         self.assertFalse(state['br1'].is_trivial_compound_itf)
+
+    def test_interface_has_pointer_to_bridge(self):
+        state = state_from_yaml(self.confdir, '''network:
+  ethernets:
+    eth0:
+      dhcp4: false
+  bridges:
+    br0:
+      dhcp4: false
+      interfaces:
+        - eth0
+      ''')
+
+        self.assertEqual(state['eth0'].bridge_link.id, "br0")
+
+    def test_interface_pointer_to_bridge_is_none(self):
+        state = state_from_yaml(self.confdir, '''network:
+  ethernets:
+    eth0:
+      dhcp4: false
+      ''')
+
+        self.assertIsNone(state['eth0'].bridge_link)
+
+    def test_interface_has_pointer_to_bond(self):
+        state = state_from_yaml(self.confdir, '''network:
+  ethernets:
+    eth0:
+      dhcp4: false
+  bonds:
+    bond0:
+      dhcp4: false
+      interfaces:
+        - eth0
+      ''')
+
+        self.assertEqual(state['eth0'].bond_link.id, "bond0")
+
+    def test_interface_pointer_to_bond_is_none(self):
+        state = state_from_yaml(self.confdir, '''network:
+  ethernets:
+    eth0:
+      dhcp4: false
+      ''')
+
+        self.assertIsNone(state['eth0'].bond_link)
+
+    def test_interface_has_pointer_to_peer(self):
+        state = state_from_yaml(self.confdir, '''network:
+  openvswitch:
+    ports:
+      - [patch0-1, patch1-0]
+  bonds:
+    bond0:
+      interfaces:
+        - patch1-0
+  bridges:
+    ovs0:
+      interfaces: [patch0-1, bond0]
+      ''')
+
+        self.assertEqual(state['patch0-1'].peer_link.id, "patch1-0")
+        self.assertEqual(state['patch1-0'].peer_link.id, "patch0-1")
 
 
 class TestFreeFunctions(TestBase):

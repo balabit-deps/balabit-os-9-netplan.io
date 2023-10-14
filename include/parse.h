@@ -16,33 +16,8 @@
  */
 
 #pragma once
-#include "netplan.h"
 #include <glib.h>
-
-/****************************************************
- * Parsed definitions
- ****************************************************/
-
-typedef enum {
-    NETPLAN_DEF_TYPE_NONE,
-    /* physical devices */
-    NETPLAN_DEF_TYPE_ETHERNET,
-    NETPLAN_DEF_TYPE_WIFI,
-    NETPLAN_DEF_TYPE_MODEM,
-    /* virtual devices */
-    NETPLAN_DEF_TYPE_VIRTUAL,
-    NETPLAN_DEF_TYPE_BRIDGE = NETPLAN_DEF_TYPE_VIRTUAL,
-    NETPLAN_DEF_TYPE_BOND,
-    NETPLAN_DEF_TYPE_VLAN,
-    NETPLAN_DEF_TYPE_TUNNEL,
-    NETPLAN_DEF_TYPE_PORT,
-    NETPLAN_DEF_TYPE_VRF,
-    /* Type fallback/passthrough */
-    NETPLAN_DEF_TYPE_NM,
-    NETPLAN_DEF_TYPE_MAX_
-} NetplanDefType;
-
-typedef struct netplan_parser NetplanParser;
+#include "types.h"
 
 /****************************************************
  * Functions
@@ -58,16 +33,25 @@ NETPLAN_PUBLIC void
 netplan_parser_clear(NetplanParser **npp);
 
 NETPLAN_PUBLIC gboolean
-netplan_parser_load_yaml(NetplanParser* npp, const char* filename, GError** error);
+netplan_parser_load_yaml(NetplanParser* npp, const char* filename, NetplanError** error);
 
 NETPLAN_PUBLIC gboolean
-netplan_state_import_parser_results(NetplanState* np_state, NetplanParser* npp, GError** error);
+netplan_parser_load_yaml_from_fd(NetplanParser* npp, int input_fd, NetplanError** error);
 
 NETPLAN_PUBLIC gboolean
-netplan_parser_load_yaml_from_fd(NetplanParser* npp, int input_fd, GError** error);
+netplan_parser_load_nullable_fields(NetplanParser* npp, int input_fd, NetplanError** error);
 
 NETPLAN_PUBLIC gboolean
-netplan_parser_load_nullable_fields(NetplanParser* npp, int input_fd, GError** error);
+netplan_state_import_parser_results(NetplanState* np_state, NetplanParser* npp, NetplanError** error);
+
+/* Load the overrides, i.e. all global values (like "renderer") or Netdef-IDs
+ * that are part of the given YAML patch (<input_fd>), and are supposed to be
+ * overridden inside the yaml hierarchy by the resulting origin_hint file.
+ * They are supposed to be parsed from the origin-hint file given in
+ * <constraint> only. */
+NETPLAN_PUBLIC gboolean
+netplan_parser_load_nullable_overrides(
+    NetplanParser* npp, int input_fd, const char* constraint, GError** error);
 
 /********** Old API below this ***********/
 

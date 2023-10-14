@@ -18,11 +18,14 @@
 #include <glib.h>
 #include <glib/gstdio.h>
 #include <gio/gio.h>
+#include <stdint.h>
 
 #include <yaml.h>
 
+#include "util.h"
 #include "parse.h"
-#include "types.h"
+#include "types-internal.h"
+#include "util-internal.h"
 
 /****************************************************
  * Loading and error handling
@@ -59,6 +62,7 @@ get_syntax_error_context(const NetplanParser* npp, const int line_num, const int
         line = g_data_input_stream_read_line(stream, &len, NULL, error);
     }
     g_string_append_printf(message, "%s\n", line);
+    g_free(line);
 
     write_error_marker(message, column);
 
@@ -155,7 +159,7 @@ yaml_error(const NetplanParser *npp, const yaml_node_t* node, GError** error, co
 
     va_start(argp, msg);
     g_vasprintf(&s, msg, argp);
-    if (node != NULL) {
+    if (node != NULL && npp->current.filepath != NULL) {
         error_context = get_syntax_error_context(npp, node->start_mark.line, node->start_mark.column, error);
         g_set_error(error, G_MARKUP_ERROR, G_MARKUP_ERROR_PARSE,
                     "%s:%zu:%zu: Error in network definition: %s\n%s",
@@ -170,6 +174,24 @@ yaml_error(const NetplanParser *npp, const yaml_node_t* node, GError** error, co
     }
     g_free(s);
     va_end(argp);
+    g_free(error_context);
     return FALSE;
 }
 
+void
+netplan_error_clear(NetplanError** error)
+{
+    g_clear_error(error);
+}
+
+ssize_t
+netplan_error_message(NetplanError* error, char* buf, size_t buf_size)
+{
+    return netplan_copy_string(error->message, buf, buf_size);
+}
+
+uint64_t
+netplan_error_code(NetplanError* error) {
+    uint64_t error_code = (uint64_t)error->domain << 32 | (uint64_t)error->code;
+    return error_code;
+}

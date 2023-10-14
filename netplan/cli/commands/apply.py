@@ -31,10 +31,12 @@ import time
 import netplan.cli.utils as utils
 from netplan.configmanager import ConfigManager, ConfigurationError
 from netplan.cli.sriov import apply_sriov_config
-from netplan.cli.ovs import apply_ovs_cleanup
+from netplan.cli.ovs import OvsDbServerNotRunning, apply_ovs_cleanup
 
 
 OVS_CLEANUP_SERVICE = 'netplan-ovs-cleanup.service'
+
+IF_NAMESIZE = 16
 
 
 class NetplanApply(utils.NetplanCommand):
@@ -234,6 +236,9 @@ class NetplanApply(utils.NetplanCommand):
             # rename non-critical network interfaces
             new_name = settings.get('name')
             if new_name:
+                if len(new_name) >= IF_NAMESIZE:
+                    logging.warning('Interface name {} is too long. {} will not be renamed'.format(new_name, iface))
+                    continue
                 if iface in devices and new_name in devices_after_udev:
                     logging.debug('Interface rename {} -> {} already happened.'.format(iface, new_name))
                     continue  # re-name already happened via 'udevadm test'
@@ -285,17 +290,24 @@ class NetplanApply(utils.NetplanCommand):
                 utils.ip_addr_flush(iface)
             # clear NM state, especially the [device].managed=true config, as that might have been
             # re-set via an udev rule setting "NM_UNMANAGED=1"
-            subprocess.check_call(['rm', '-rf', '/run/NetworkManager/devices'])
+            shutil.rmtree('/run/NetworkManager/devices', ignore_errors=True)
             utils.systemctl_network_manager('start', sync=sync)
             if sync:
-                # wait up to 2 sec for 'STATE=connected (site/local-only)' or
-                # 'STATE=connected' to appear in 'nmcli general' STATE
-                env = dict(os.environ, LC_ALL='C')
+                # 'nmcli' could be /usr/bin/nmcli or
+                # /snap/bin/nmcli -> /snap/bin/network-manager.nmcli
                 cmd = ['nmcli', 'general', 'status']
-                for _ in range(20):
-                    if b'\nconnected' in subprocess.check_output(cmd, env=env):
+                # wait a bit for 'connected (site/local-only)' or
+                # 'connected' to appear in 'nmcli general' STATE
+                for _ in range(10):
+                    out = subprocess.run(cmd, capture_output=True, text=True)
+                    # Handle nmcli's "not running" return code (8) gracefully,
+                    # giving some more time for NetworkManager startup
+                    if out.returncode == 8:
+                        time.sleep(1)
+                        continue
+                    if '\nconnected' in str(out.stdout):
                         break
-                    time.sleep(0.1)
+                    time.sleep(0.5)
 
     @staticmethod
     def is_composite_member(composites, phy):
@@ -336,7 +348,7 @@ class NetplanApply(utils.NetplanCommand):
                 cmd = ['ip', 'link', 'delete', 'dev', link]
                 subprocess.check_call(cmd)
             except subprocess.CalledProcessError:
-                logging.warn('Could not delete interface {}'.format(link))
+                logging.warning('Could not delete interface {}'.format(link))
 
         return dropped_interfaces
 
@@ -401,3 +413,5 @@ class NetplanApply(utils.NetplanCommand):
             logging.error(str(e))
             if exit_on_error:
                 sys.exit(1)
+        except OvsDbServerNotRunning as e:
+            logging.warning('Cannot call Open vSwitch: {}.'.format(e))

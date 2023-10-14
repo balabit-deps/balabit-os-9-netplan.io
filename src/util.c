@@ -21,6 +21,7 @@
 #include <fnmatch.h>
 #include <errno.h>
 #include <string.h>
+#include <sys/mman.h>
 
 #include <glib.h>
 #include <glib/gprintf.h>
@@ -40,6 +41,9 @@ wifi_frequency_24;
 NETPLAN_ABI GHashTable*
 wifi_frequency_5;
 
+const gchar* FALLBACK_FILENAME = "70-netplan-set.yaml";
+
+typedef struct netplan_state_iterator RealStateIter;
 /**
  * Create the parent directories of given file path. Exit program on failure.
  */
@@ -112,7 +116,9 @@ unlink_glob(const char* rootdir, const char* _glob)
 int find_yaml_glob(const char* rootdir, glob_t* out_glob)
 {
     int rc;
-    g_autofree char* rglob = g_strjoin(NULL, rootdir ?: "", G_DIR_SEPARATOR_S, "{lib,etc,run}/netplan/*.yaml", NULL);
+    g_autofree char* rglob = g_build_path(G_DIR_SEPARATOR_S,
+                                          rootdir ?: G_DIR_SEPARATOR_S,
+                                          "{lib,etc,run}/netplan/*.yaml", NULL);
     rc = glob(rglob, GLOB_BRACE, NULL, out_glob);
     if (rc != 0 && rc != GLOB_NOMATCH) {
         // LCOV_EXCL_START
@@ -463,7 +469,7 @@ systemd_escape(char* string)
     gint exit_status = 0;
     gchar *escaped;
 
-    gchar *argv[] = {"bin" "/" "systemd-escape", string, NULL};
+    gchar *argv[] = {"bin" "/" "systemd-escape", "--", string, NULL};
     g_spawn_sync("/", argv, NULL, 0, NULL, NULL, &escaped, &stderrh, &exit_status, &err);
     #if GLIB_CHECK_VERSION (2, 70, 0)
     g_spawn_check_wait_status(exit_status, &err);
@@ -484,55 +490,93 @@ systemd_escape(char* string)
 gboolean
 netplan_delete_connection(const char* id, const char* rootdir)
 {
-    g_autofree gchar* del = NULL;
+    g_autofree gchar* yaml_path = NULL;
     g_autoptr(GError) error = NULL;
     NetplanNetDefinition* nd = NULL;
     gboolean ret = TRUE;
+    int patch_fd = -1;
 
-    NetplanState* np_state = netplan_state_new();
-    NetplanParser* npp = netplan_parser_new();
+    NetplanParser* input_parser = netplan_parser_new();
+    NetplanState* input_state = netplan_state_new();
+    NetplanParser* output_parser = NULL;
+    NetplanState* output_state = NULL;
 
     /* parse all YAML files */
-    if (   !netplan_parser_load_yaml_hierarchy(npp, rootdir, &error)
-        || !netplan_state_import_parser_results(np_state, npp, &error)) {
-        // LCOV_EXCL_START
-        g_fprintf(stderr, "%s\n", error->message);
+    if (   !netplan_parser_load_yaml_hierarchy(input_parser, rootdir, &error)
+        || !netplan_state_import_parser_results(input_state, input_parser, &error)) {
+        g_fprintf(stderr, "netplan_delete_connection: Cannot parse input: %s\n", error->message);
         ret = FALSE;
         goto cleanup;
-        // LCOV_EXCL_STOP
     }
 
-    if (!np_state->netdefs) {
-        // LCOV_EXCL_START
-        g_fprintf(stderr, "netplan_delete_connection: %s\n", error->message);
-        ret = FALSE;
-        goto cleanup;
-        // LCOV_EXCL_STOP
-    }
-
-    /* find filename for specified netdef ID */
-    nd = g_hash_table_lookup(np_state->netdefs, id);
+    /* find specified netdef in input state */
+    nd = netplan_state_get_netdef(input_state, id);
     if (!nd) {
-        g_warning("netplan_delete_connection: Cannot delete %s, does not exist.", id);
+        g_fprintf(stderr, "netplan_delete_connection: Cannot delete %s, does not exist.\n", id);
         ret = FALSE;
         goto cleanup;
     }
 
-    del = g_strdup_printf("network.%s.%s=NULL", netplan_def_type_name(nd->type), id);
+    /* Build up a tab-separated YAML path for this Netdef (e.g. network.ethernets.eth0=...) */
+    yaml_path = g_strdup_printf("network\t%s\t%s", netplan_def_type_name(nd->type), id);
 
-    /* TODO: refactor logic to actually be inside the library instead of spawning another process */
-    const gchar *argv[] = { SBINDIR "/" "netplan", "set", del, NULL, NULL, NULL };
-    if (rootdir) {
-        argv[3] = "--root-dir";
-        argv[4] = rootdir;
+    /* create a temporary file in memory, to hold our YAML patch */
+    patch_fd = memfd_create("patch.yaml", 0);
+    if (patch_fd < 0) {
+        // LCOV_EXCL_START
+        g_fprintf(stderr, "netplan_delete_connection: Cannot create memfd: %m\n");
+        ret = FALSE;
+        goto cleanup;
+        // LCOV_EXCL_STOP
     }
-    if (getenv("TEST_NETPLAN_CMD") != 0)
-       argv[0] = getenv("TEST_NETPLAN_CMD");
-    ret = g_spawn_sync(NULL, (gchar**)argv, NULL, 0, NULL, NULL, NULL, NULL, NULL, NULL);
+    if (!netplan_util_create_yaml_patch(yaml_path, "NULL", patch_fd, &error)) {
+        // LCOV_EXCL_START
+        g_fprintf(stderr, "netplan_delete_connection: Cannot create YAML patch: %s\n", error->message);
+        ret = FALSE;
+        goto cleanup;
+        // LCOV_EXCL_STOP
+    }
+
+    /* Create a new parser & state to hold our output YAML, ignoring the to be
+     * deleted Netdef from the patch */
+    output_parser = netplan_parser_new();
+    output_state = netplan_state_new();
+
+    lseek(patch_fd, 0, SEEK_SET);
+    if (   !netplan_parser_load_nullable_fields(output_parser, patch_fd, &error)
+        || !netplan_parser_load_yaml_hierarchy(output_parser, rootdir, &error)) {
+        // LCOV_EXCL_START
+        g_fprintf(stderr, "netplan_delete_connection: Cannot load output state: %s\n", error->message);
+        ret = FALSE;
+        goto cleanup;
+        // LCOV_EXCL_STOP
+    }
+
+    lseek(patch_fd, 0, SEEK_SET);
+    if (!netplan_parser_load_yaml_from_fd(output_parser, patch_fd, &error)) {
+        // LCOV_EXCL_START
+        g_fprintf(stderr, "netplan_delete_connection: Cannot parse YAML patch: %s\n", error->message);
+        ret = FALSE;
+        goto cleanup;
+        // LCOV_EXCL_STOP
+    }
+
+    /* We're only deleting some data, so FALLBACK_FILENAME should never be created */
+    if (   !netplan_state_import_parser_results(output_state, output_parser, &error)
+        || !netplan_state_update_yaml_hierarchy(output_state, FALLBACK_FILENAME, rootdir, &error)) {
+        // LCOV_EXCL_START
+        g_fprintf(stderr, "netplan_delete_connection: Cannot write output state: %s\n", error->message);
+        ret = FALSE;
+        goto cleanup;
+        // LCOV_EXCL_STOP
+    }
 
 cleanup:
-    if (npp) netplan_parser_clear(&npp);
-    if (np_state) netplan_state_clear(&np_state);
+    if (input_parser) netplan_parser_clear(&input_parser);
+    if (input_state) netplan_state_clear(&input_state);
+    if (output_parser) netplan_parser_clear(&output_parser);
+    if (output_state) netplan_state_clear(&output_state);
+    if (patch_fd >= 0) close(patch_fd);
     return ret;
 }
 
@@ -554,8 +598,8 @@ netplan_generate(const char* rootdir)
  * Extract the netplan netdef ID from a NetworkManager connection profile (keyfile),
  * generated by netplan. Used by the NetworkManager YAML backend.
  */
-gchar*
-netplan_get_id_from_nm_filename(const char* filename, const char* ssid)
+ssize_t
+netplan_get_id_from_nm_filepath(const char* filename, const char* ssid, char* out_buffer, size_t out_buf_size)
 {
     g_autofree gchar* escaped_ssid = NULL;
     g_autofree gchar* suffix = NULL;
@@ -566,7 +610,7 @@ netplan_get_id_from_nm_filename(const char* filename, const char* ssid)
     gsize id_len = 0;
 
     if (!pos)
-        return NULL;
+        return 0;
 
     if (ssid) {
         escaped_ssid = g_uri_escape_string(ssid, NULL, TRUE);
@@ -576,12 +620,42 @@ netplan_get_id_from_nm_filename(const char* filename, const char* ssid)
         end = g_strrstr(filename, ".nmconnection");
 
     if (!end)
-        return NULL;
+        return 0;
 
     /* Move pointer to start of netplan ID inside filename string */
     start = pos + strlen(nm_prefix);
     id_len = end - start;
-    return g_strndup(start, id_len);
+
+    if (out_buf_size < id_len + 1)
+        return NETPLAN_BUFFER_TOO_SMALL;
+
+    strncpy(out_buffer, start, id_len);
+    out_buffer[id_len] = '\0';
+
+    return id_len + 1;
+}
+
+ssize_t
+netplan_netdef_get_output_filename(const NetplanNetDefinition* netdef, const char* ssid, char* out_buffer, size_t out_buf_size)
+{
+    g_autofree gchar* conf_path = NULL;
+
+    if (netdef->backend == NETPLAN_BACKEND_NM) {
+        if (ssid) {
+            g_autofree char* escaped_ssid = g_uri_escape_string(ssid, NULL, TRUE);
+            conf_path = g_strjoin(NULL, "/run/NetworkManager/system-connections/netplan-", netdef->id, "-", escaped_ssid, ".nmconnection", NULL);
+        } else {
+            conf_path = g_strjoin(NULL, "/run/NetworkManager/system-connections/netplan-", netdef->id, ".nmconnection", NULL);
+        }
+
+    } else if (netdef->backend == NETPLAN_BACKEND_NETWORKD || netdef->backend == NETPLAN_BACKEND_OVS) {
+        conf_path = g_strjoin(NULL, "/run/systemd/network/10-netplan-", netdef->id, ".network", NULL);
+    }
+
+    if (conf_path)
+        return netplan_copy_string(conf_path, out_buffer, out_buf_size);
+
+    return 0;
 }
 
 gboolean
@@ -606,8 +680,11 @@ netplan_parser_load_yaml_hierarchy(NetplanParser* npp, const char* rootdir, GErr
     config_keys = g_list_sort(g_hash_table_get_keys(configs), (GCompareFunc) strcmp);
 
     for (GList* i = config_keys; i != NULL; i = i->next)
-        if (!netplan_parser_load_yaml(npp, g_hash_table_lookup(configs, i->data), error))
+        if (!netplan_parser_load_yaml(npp, g_hash_table_lookup(configs, i->data), error)) {
+            globfree(&gl);
             return FALSE;
+        }
+    globfree(&gl);
     return TRUE;
 }
 
@@ -746,7 +823,7 @@ netplan_copy_string(const char* input, char* out_buffer, size_t out_size)
     return end - out_buffer + 1;
 }
 
-NETPLAN_INTERNAL gboolean
+gboolean
 netplan_netdef_match_interface(const NetplanNetDefinition* netdef, const char* name, const char* mac, const char* driver_name)
 {
     if (!netdef->has_match)
@@ -781,10 +858,10 @@ netplan_netdef_match_interface(const NetplanNetDefinition* netdef, const char* n
     return TRUE;
 }
 
-NETPLAN_INTERNAL ssize_t
-netplan_netdef_get_set_name(const NetplanNetDefinition* netdef, char* out_buf, size_t out_size)
+ssize_t
+netplan_netdef_get_set_name(const NetplanNetDefinition* netdef, char* out_buffer, size_t out_buf_size)
 {
-    return netplan_copy_string(netdef->set_name, out_buf, out_size);
+    return netplan_copy_string(netdef->set_name, out_buffer, out_buf_size);
 }
 
 gboolean
@@ -801,5 +878,116 @@ is_multicast_address(const char* address)
             return TRUE;
     }
 
+    return FALSE;
+}
+
+void
+netplan_state_iterator_init(const NetplanState* np_state, NetplanStateIterator* iter)
+{
+    g_assert(iter);
+    RealStateIter* _iter = (RealStateIter*) iter;
+    _iter->next = g_list_first(np_state->netdefs_ordered);
+}
+
+NetplanNetDefinition*
+netplan_state_iterator_next(NetplanStateIterator* iter)
+{
+    NetplanNetDefinition* netdef = NULL;
+    RealStateIter* _iter = (RealStateIter*) iter;
+
+    if (_iter && _iter->next) {
+        netdef = _iter->next->data;
+        _iter->next = g_list_next(_iter->next);
+    }
+
+    return netdef;
+}
+
+gboolean
+netplan_state_iterator_has_next(const NetplanStateIterator* iter)
+{
+    RealStateIter* _iter = (RealStateIter*) iter;
+
+    if (!_iter)
+        return FALSE;
+    return _iter->next != NULL;
+}
+
+static const char*
+normalize_ip_address(const char* addr, const guint family)
+{
+    if (!g_strcmp0(addr, "default")) {
+        if (family == AF_INET)
+            return "0.0.0.0/0";
+        else
+            return "::/0";
+    }
+
+    return addr;
+}
+/*
+ * Returns true if a route already exists in the netdef routes list.
+ *
+ * We consider a route a duplicate if it is in the same table, has the same metric,
+ * src, to, via and family values.
+ *
+ * XXX: in the future we could add a route "key" to a hash set so this verification could
+ * be done faster.
+ */
+gboolean
+is_route_present(const NetplanNetDefinition* netdef, const NetplanIPRoute* route)
+{
+    const GArray* routes = netdef->routes;
+
+    for (int i = 0; i < routes->len; i++) {
+        const NetplanIPRoute* entry = g_array_index(routes, NetplanIPRoute*, i);
+        if (
+                entry->family == route->family &&
+                entry->table == route->table &&
+                entry->metric == route->metric &&
+                g_strcmp0(entry->from, route->from) == 0 &&
+                g_strcmp0(normalize_ip_address(entry->to, entry->family),
+                    normalize_ip_address(route->to, route->family)) == 0 &&
+                g_strcmp0(entry->via, route->via) == 0
+           )
+            return TRUE;
+    }
+
+    return FALSE;
+}
+/*
+ * Returns true if a policy rule already exists in the netdef rules list.
+ */
+gboolean
+is_route_rule_present(const NetplanNetDefinition* netdef, const NetplanIPRule* rule)
+{
+    const GArray* rules = netdef->ip_rules;
+
+    for (int i = 0; i < rules->len; i++) {
+        const NetplanIPRule* entry = g_array_index(rules, NetplanIPRule*, i);
+        if (
+                entry->family == rule->family &&
+                g_strcmp0(entry->from, rule->from) == 0 &&
+                g_strcmp0(entry->to, rule->to) == 0 &&
+                entry->table == rule->table &&
+                entry->priority == rule->priority &&
+                entry->fwmark == rule->fwmark &&
+                entry->tos == rule->tos
+           )
+            return TRUE;
+    }
+
+    return FALSE;
+}
+
+gboolean
+is_string_in_array(GArray* array, const char* value)
+{
+    for (unsigned i = 0; i < array->len; ++i) {
+        char* item = g_array_index(array, char*, i);
+        if (!g_strcmp0(value, item)) {
+            return TRUE;
+        }
+    }
     return FALSE;
 }

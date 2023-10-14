@@ -112,9 +112,8 @@ VLAN=engreen
     vlan20: {id: 20, link: lan}''')
 
         self.assert_networkd({'lan.network': '''[Match]
-MACAddress=11:22:33:44:55:66
+PermanentMACAddress=11:22:33:44:55:66
 Name=lan
-Type=!vlan bond bridge
 
 [Link]
 MTUBytes=9000
@@ -124,8 +123,7 @@ LinkLocalAddressing=ipv6
 VLAN=vlan20
 ''',
                               'lan.link': '''[Match]
-MACAddress=11:22:33:44:55:66
-Type=!vlan bond bridge
+PermanentMACAddress=11:22:33:44:55:66
 
 [Link]
 Name=lan
@@ -220,7 +218,7 @@ ip6-privacy=0
             m = re.search('uuid=([0-9a-fA-F-]{36})\n', f.read())
             self.assertTrue(m)
             uuid = m.group(1)
-            self.assertNotEquals(uuid, "00000000-0000-0000-0000-000000000000")
+            self.assertNotEqual(uuid, "00000000-0000-0000-0000-000000000000")
 
         self.assert_nm({'en-v': '''[connection]
 id=netplan-en-v

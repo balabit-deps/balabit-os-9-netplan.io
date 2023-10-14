@@ -17,10 +17,9 @@
 
 #pragma once
 
-#define __USE_MISC
 #include <glob.h>
 #include <glib.h>
-#include "types.h"
+#include "types-internal.h"
 
 #include <glib.h>
 #include "netplan.h"
@@ -100,3 +99,36 @@ complex_object_is_dirty(const NetplanNetDefinition* def, const void* obj, size_t
 
 gboolean
 is_multicast_address(const char*);
+
+NETPLAN_INTERNAL gboolean
+_netplan_netdef_get_sriov_vlan_filter(const NetplanNetDefinition* netdef);
+
+NETPLAN_INTERNAL gboolean
+_netplan_netdef_get_critical(const NetplanNetDefinition* netdef);
+
+NETPLAN_INTERNAL gboolean
+_netplan_netdef_get_optional(const NetplanNetDefinition* netdef);
+
+NETPLAN_INTERNAL ssize_t
+_netplan_netdef_get_embedded_switch_mode(const NetplanNetDefinition* netdef, char* out_buffer, size_t out_buf_size);
+
+NETPLAN_INTERNAL gboolean
+_netplan_netdef_get_delay_vf_rebind(const NetplanNetDefinition* netdef);
+
+NETPLAN_INTERNAL gboolean
+netplan_netdef_get_delay_virtual_functions_rebind(const NetplanNetDefinition* netdef);
+
+NETPLAN_INTERNAL guint
+_netplan_netdef_get_vlan_id(const NetplanNetDefinition* netdef);
+
+NETPLAN_INTERNAL gboolean
+_netplan_netdef_is_trivial_compound_itf(const NetplanNetDefinition* netdef);
+
+NETPLAN_INTERNAL gboolean
+is_route_present(const NetplanNetDefinition* netdef, const NetplanIPRoute* route);
+
+NETPLAN_INTERNAL gboolean
+is_route_rule_present(const NetplanNetDefinition* netdef, const NetplanIPRule* rule);
+
+NETPLAN_INTERNAL gboolean
+is_string_in_array(GArray* array, const char* value);

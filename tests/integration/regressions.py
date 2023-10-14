@@ -21,6 +21,8 @@
 # You should have received a copy of the GNU General Public License
 # along with this program.  If not, see <http://www.gnu.org/licenses/>.
 
+import json
+import os
 import sys
 import signal
 import subprocess
@@ -73,13 +75,13 @@ class TestNetworkd(IntegrationTestsBase, _CommonTests):
       ''' % {'r': self.backend, 'ec': self.dev_e_client, 'e2c': self.dev_e2_client})
         self.generate_and_settle([self.dev_e_client, self.dev_e2_client, 'mybond'])
         self.assert_iface_up(self.dev_e_client,
-                             ['master mybond', '00:0a:f7:72:a7:28'],
+                             ['master mybond', '00:0a:f7:72:a7:28'],  # wokeignore:rule=master
                              ['inet '])
         self.assert_iface_up(self.dev_e2_client,
-                             ['master mybond', '00:0a:f7:72:a7:28'],
+                             ['master mybond', '00:0a:f7:72:a7:28'],  # wokeignore:rule=master
                              ['inet '])
         self.assert_iface_up('mybond', ['inet 192.168.5.[0-9]+/24'])
-        with open('/sys/class/net/mybond/bonding/slaves') as f:
+        with open('/sys/class/net/mybond/bonding/slaves') as f:  # wokeignore:rule=slave
             self.assertIn(self.dev_e_client, f.read().strip())
 
     def test_try_accept_lp1949095(self):
@@ -87,7 +89,8 @@ class TestNetworkd(IntegrationTestsBase, _CommonTests):
             f.write('''network:
   renderer: %(r)s
   version: 2''' % {'r': self.backend})
-        p = subprocess.Popen(['netplan', 'try'], bufsize=1, universal_newlines=True,
+            os.chmod(self.config, mode=0o600)
+        p = subprocess.Popen(['netplan', 'try'], bufsize=1, text=True,
                              stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
         time.sleep(2)
         p.send_signal(signal.SIGUSR1)
@@ -105,7 +108,8 @@ class TestNetworkd(IntegrationTestsBase, _CommonTests):
             f.write('''network:
   renderer: %(r)s
   version: 2''' % {'r': self.backend})
-        p = subprocess.Popen(['netplan', 'try'], bufsize=1, universal_newlines=True,
+            os.chmod(self.config, mode=0o600)
+        p = subprocess.Popen(['netplan', 'try'], bufsize=1, text=True,
                              stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
         time.sleep(2)
         p.send_signal(signal.SIGINT)
@@ -140,6 +144,59 @@ class TestNetworkd(IntegrationTestsBase, _CommonTests):
                  "skipping as NetworkManager backend tests are disabled")
 class TestNetworkManager(IntegrationTestsBase, _CommonTests):
     backend = 'NetworkManager'
+
+
+class TestDbus(IntegrationTestsBase):
+    # This test can be dropped when tests/integration/dbus.py is
+    # integrated as an autopkgtest in the Debian package
+    def test_dbus_config_get_lp1997467(self):
+
+        NETPLAN_YAML = '''network:
+  version: 2
+  ethernets:
+    %(nic)s:
+      dhcp4: true
+'''
+        BUSCTL_CONFIG = [
+                'busctl', '-j', 'call', '--system',
+                'io.netplan.Netplan', '/io/netplan/Netplan',
+                'io.netplan.Netplan', 'Config']
+
+        BUSCTL_CONFIG_GET = [
+                'busctl', '-j', 'call', '--system',
+                'io.netplan.Netplan', 'PLACEHOLDER',
+                'io.netplan.Netplan.Config', 'Get']
+
+        # Terminates netplan-dbus if it is running already
+        cmd = ['ps', '-C', 'netplan-dbus', '-o', 'pid=']
+        out = subprocess.run(cmd, capture_output=True, text=True)
+        if out.returncode == 0:
+            pid = out.stdout.strip()
+            os.kill(int(pid), signal.SIGTERM)
+
+        with open(self.config, 'w') as f:
+            f.write(NETPLAN_YAML % {'nic': self.dev_e_client})
+
+        out = subprocess.run(BUSCTL_CONFIG, capture_output=True, text=True)
+        self.assertEqual(out.returncode, 0, msg=f"Busctl Config() failed with error: {out.stderr}")
+
+        out_dict = json.loads(out.stdout)
+        config_path = out_dict.get('data')[0]
+        self.assertNotEqual(config_path, "", msg="Got an empty response from DBUS")
+
+        # The path has the following format: /io/netplan/Netplan/config/WM6X01
+        BUSCTL_CONFIG_GET[5] = config_path
+
+        # Retrieving the config
+        out = subprocess.run(BUSCTL_CONFIG_GET, capture_output=True, text=True)
+        self.assertEqual(out.returncode, 0, msg=f"Busctl Get() failed with error: {out.stderr}")
+
+        out_dict = json.loads(out.stdout)
+        netplan_data = out_dict.get('data')[0]
+
+        self.assertNotEqual(netplan_data, "", msg="Got an empty response from DBUS")
+        self.assertEqual(netplan_data, NETPLAN_YAML % {'nic': self.dev_e_client},
+                         msg="The original YAML is different from the one returned by DBUS")
 
 
 unittest.main(testRunner=unittest.TextTestRunner(stream=sys.stdout, verbosity=2))

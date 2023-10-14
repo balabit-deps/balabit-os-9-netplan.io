@@ -49,16 +49,16 @@ class _CommonTests():
                                   self.dev_e2_client,
                                   self.state_dhcp4('mybr')])
         self.assert_iface_up(self.dev_e_client, ['inet 192.168.5.[0-9]+/24'])
-        self.assert_iface_up(self.dev_e2_client, ['master mybr'], ['inet '])
+        self.assert_iface_up(self.dev_e2_client, ['master mybr'], ['inet '])  # wokeignore:rule=master
         self.assert_iface_up('mybr', ['inet 192.168.6.[0-9]+/24'])
         lines = subprocess.check_output(['bridge', 'link', 'show', 'mybr'],
-                                        universal_newlines=True).splitlines()
+                                        text=True).splitlines()
         self.assertEqual(len(lines), 1, lines)
         self.assertIn(self.dev_e2_client, lines[0])
 
         # ensure that they do not get managed by NM for foreign backends
         expected_state = (self.backend == 'NetworkManager') and 'connected' or 'unmanaged'
-        out = subprocess.check_output(['nmcli', 'dev'], universal_newlines=True)
+        out = subprocess.check_output(['nmcli', 'dev'], text=True)
         for i in [self.dev_e_client, self.dev_e2_client, 'mybr']:
             self.assertRegex(out, r'%s\s+(ethernet|bridge)\s+%s' % (i, expected_state))
 
@@ -80,10 +80,10 @@ class _CommonTests():
         stp: false
       dhcp4: yes''' % {'r': self.backend, 'e2c': self.dev_e2_client})
         self.generate_and_settle([self.dev_e2_client, self.state_dhcp4('mybr')])
-        self.assert_iface_up(self.dev_e2_client, ['master mybr'], ['inet '])
+        self.assert_iface_up(self.dev_e2_client, ['master mybr'], ['inet '])  # wokeignore:rule=master
         self.assert_iface_up('mybr', ['inet 192.168.6.[0-9]+/24'])
         lines = subprocess.check_output(['bridge', 'link', 'show', 'mybr'],
-                                        universal_newlines=True).splitlines()
+                                        text=True).splitlines()
         self.assertEqual(len(lines), 1, lines)
         self.assertIn(self.dev_e2_client, lines[0])
         with open('/sys/class/net/mybr/brif/%s/path_cost' % self.dev_e2_client) as f:
@@ -106,10 +106,10 @@ class _CommonTests():
         stp: false
       dhcp4: yes''' % {'r': self.backend, 'e2c': self.dev_e2_client})
         self.generate_and_settle([self.dev_e2_client, self.state_dhcp4('mybr')])
-        self.assert_iface_up(self.dev_e2_client, ['master mybr'], ['inet '])
+        self.assert_iface_up(self.dev_e2_client, ['master mybr'], ['inet '])  # wokeignore:rule=master
         self.assert_iface_up('mybr', ['inet 192.168.6.[0-9]+/24'])
         lines = subprocess.check_output(['bridge', 'link', 'show', 'mybr'],
-                                        universal_newlines=True).splitlines()
+                                        text=True).splitlines()
         self.assertEqual(len(lines), 1, lines)
         self.assertIn(self.dev_e2_client, lines[0])
         with open('/sys/class/net/mybr/bridge/ageing_time') as f:
@@ -132,10 +132,10 @@ class _CommonTests():
         stp: false
       dhcp4: yes''' % {'r': self.backend, 'e2c': self.dev_e2_client})
         self.generate_and_settle([self.dev_e2_client, self.state_dhcp4('mybr')])
-        self.assert_iface_up(self.dev_e2_client, ['master mybr'], ['inet '])
+        self.assert_iface_up(self.dev_e2_client, ['master mybr'], ['inet '])  # wokeignore:rule=master
         self.assert_iface_up('mybr', ['inet 192.168.6.[0-9]+/24'])
         lines = subprocess.check_output(['bridge', 'link', 'show', 'mybr'],
-                                        universal_newlines=True).splitlines()
+                                        text=True).splitlines()
         self.assertEqual(len(lines), 1, lines)
         self.assertIn(self.dev_e2_client, lines[0])
         with open('/sys/class/net/mybr/bridge/max_age') as f:
@@ -158,10 +158,10 @@ class _CommonTests():
         stp: false
       dhcp4: yes''' % {'r': self.backend, 'e2c': self.dev_e2_client})
         self.generate_and_settle([self.dev_e2_client, self.state_dhcp4('mybr')])
-        self.assert_iface_up(self.dev_e2_client, ['master mybr'], ['inet '])
+        self.assert_iface_up(self.dev_e2_client, ['master mybr'], ['inet '])  # wokeignore:rule=master
         self.assert_iface_up('mybr', ['inet 192.168.6.[0-9]+/24'])
         lines = subprocess.check_output(['bridge', 'link', 'show', 'mybr'],
-                                        universal_newlines=True).splitlines()
+                                        text=True).splitlines()
         self.assertEqual(len(lines), 1, lines)
         self.assertIn(self.dev_e2_client, lines[0])
         with open('/sys/class/net/mybr/bridge/hello_time') as f:
@@ -184,10 +184,10 @@ class _CommonTests():
         stp: false
       dhcp4: yes''' % {'r': self.backend, 'e2c': self.dev_e2_client})
         self.generate_and_settle([self.dev_e2_client, self.state_dhcp4('mybr')])
-        self.assert_iface_up(self.dev_e2_client, ['master mybr'], ['inet '])
+        self.assert_iface_up(self.dev_e2_client, ['master mybr'], ['inet '])  # wokeignore:rule=master
         self.assert_iface_up('mybr', ['inet 192.168.6.[0-9]+/24'])
         lines = subprocess.check_output(['bridge', 'link', 'show', 'mybr'],
-                                        universal_newlines=True).splitlines()
+                                        text=True).splitlines()
         self.assertEqual(len(lines), 1, lines)
         self.assertIn(self.dev_e2_client, lines[0])
         with open('/sys/class/net/mybr/bridge/forward_delay') as f:
@@ -211,10 +211,10 @@ class _CommonTests():
         stp: false
       dhcp4: yes''' % {'r': self.backend, 'e2c': self.dev_e2_client})
         self.generate_and_settle([self.dev_e2_client, self.state_dhcp4('mybr')])
-        self.assert_iface_up(self.dev_e2_client, ['master mybr'], ['inet '])
+        self.assert_iface_up(self.dev_e2_client, ['master mybr'], ['inet '])  # wokeignore:rule=master
         self.assert_iface_up('mybr', ['inet 192.168.6.[0-9]+/24'])
         lines = subprocess.check_output(['bridge', 'link', 'show', 'mybr'],
-                                        universal_newlines=True).splitlines()
+                                        text=True).splitlines()
         self.assertEqual(len(lines), 1, lines)
         self.assertIn(self.dev_e2_client, lines[0])
         with open('/sys/class/net/mybr/bridge/stp_state') as f:
@@ -238,10 +238,10 @@ class _CommonTests():
         stp: false
       dhcp4: yes''' % {'r': self.backend, 'e2c': self.dev_e2_client})
         self.generate_and_settle([self.dev_e2_client, self.state_dhcp4('mybr')])
-        self.assert_iface_up(self.dev_e2_client, ['master mybr'], ['inet '])
+        self.assert_iface_up(self.dev_e2_client, ['master mybr'], ['inet '])  # wokeignore:rule=master
         self.assert_iface_up('mybr', ['inet 192.168.6.[0-9]+/24'])
         lines = subprocess.check_output(['bridge', 'link', 'show', 'mybr'],
-                                        universal_newlines=True).splitlines()
+                                        text=True).splitlines()
         self.assertEqual(len(lines), 1, lines)
         self.assertIn(self.dev_e2_client, lines[0])
         with open('/sys/class/net/mybr/brif/%s/priority' % self.dev_e2_client) as f:
@@ -271,8 +271,9 @@ class TestNetworkd(IntegrationTestsBase, _CommonTests):
       dhcp4: yes''' % {'r': self.backend,
                        'ec': self.dev_e_client,
                        'ec_mac': self.dev_e_client_mac})
+        self.match_veth_by_non_permanent_mac_quirk('ethbr', self.dev_e_client_mac)
         self.generate_and_settle([self.dev_e_client, self.state_dhcp4('br0')])
-        self.assert_iface_up(self.dev_e_client, ['master br0'], ['inet '])
+        self.assert_iface_up(self.dev_e_client, ['master br0'], ['inet '])  # wokeignore:rule=master
         self.assert_iface_up('br0', ['inet 192.168.5.[0-9]+/24', 'ether 00:01:02:03:04:05'])
 
     def test_bridge_anonymous(self):
@@ -288,10 +289,10 @@ class TestNetworkd(IntegrationTestsBase, _CommonTests):
     mybr:
       interfaces: [ethbr]''' % {'r': self.backend, 'e2c': self.dev_e2_client})
         self.generate_and_settle([self.dev_e2_client, self.state_up('mybr')])
-        self.assert_iface_up(self.dev_e2_client, ['master mybr'], ['inet '])
+        self.assert_iface_up(self.dev_e2_client, ['master mybr'], ['inet '])  # wokeignore:rule=master
         self.assert_iface_up('mybr', [], ['inet 192.168.6.[0-9]+/24'])
         lines = subprocess.check_output(['bridge', 'link', 'show', 'mybr'],
-                                        universal_newlines=True).splitlines()
+                                        text=True).splitlines()
         self.assertEqual(len(lines), 1, lines)
         self.assertIn(self.dev_e2_client, lines[0])
 
@@ -335,10 +336,10 @@ class TestNetworkManager(IntegrationTestsBase, _CommonTests):
         stp: false
       dhcp4: yes''' % {'r': self.backend, 'e2c': self.dev_e2_client})
         self.generate_and_settle([self.dev_e2_client, self.state_dhcp4('mybr')])
-        self.assert_iface_up(self.dev_e2_client, ['master mybr'], ['inet '])
+        self.assert_iface_up(self.dev_e2_client, ['master mybr'], ['inet '])  # wokeignore:rule=master
         self.assert_iface_up('mybr', ['inet 192.168.6.[0-9]+/24'])
         lines = subprocess.check_output(['bridge', 'link', 'show', 'mybr'],
-                                        universal_newlines=True).splitlines()
+                                        text=True).splitlines()
         self.assertEqual(len(lines), 1, lines)
         self.assertIn(self.dev_e2_client, lines[0])
         with open('/sys/class/net/mybr/bridge/priority') as f:

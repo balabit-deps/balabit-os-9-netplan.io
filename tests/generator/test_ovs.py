@@ -122,13 +122,14 @@ ExecStart=/usr/bin/ovs-vsctl set open_vswitch . external-ids:netplan/other-confi
         self.assert_networkd({'eth0.network': ND_DHCP4 % 'eth0'})
 
     def test_global_set_protocols(self):
-        self.generate('''network:
+        out = self.generate('''network:
   version: 2
   openvswitch:
-    protocols: [OpenFlow10, OpenFlow11, OpenFlow12]
+    protocols: [OpenFlow10, OpenFlow11, OpenFlow12, OpenFlow16]
   bridges:
     ovs0:
-      openvswitch: {}''')
+      openvswitch: {}''', skip_generated_yaml_validation=True)  # OpenFlow16 won't be re-generated
+        self.assertIn('Open vSwitch: Ignoring deprecated protocol: OpenFlow16', out)
         self.assert_ovs({'ovs0.service': OVS_VIRTUAL % {'iface': 'ovs0', 'extra': '''
 [Service]
 Type=oneshot
@@ -216,7 +217,7 @@ ExecStart=/usr/bin/ovs-vsctl set Port bond0 external-ids:netplan/external-ids/if
       interfaces: [eth1, eth2]
       openvswitch: {}
 ''', expect_fail=True)
-        self.assertIn("Bond bond0 needs to be a slave of an OpenVSwitch bridge", err)
+        self.assertIn("Bond bond0 needs to be a member of an OpenVSwitch bridge", err)
 
     def test_bond_not_enough_interfaces(self):
         err = self.generate('''network:
@@ -233,7 +234,7 @@ ExecStart=/usr/bin/ovs-vsctl set Port bond0 external-ids:netplan/external-ids/if
       interfaces: [bond0]
       openvswitch: {}
 ''', expect_fail=True)
-        self.assertIn("Bond bond0 needs to have at least 2 slave interfaces", err)
+        self.assertIn("Bond bond0 needs to have at least 2 member interfaces", err)
 
     def test_bond_lacp(self):
         self.generate('''network:
@@ -299,7 +300,7 @@ ExecStart=/usr/bin/ovs-vsctl set Port bond0 external-ids:netplan/lacp=active
       openvswitch:
         lacp: passive
 ''', expect_fail=True)
-        self.assertIn("Key 'lacp' is only valid for interface type 'openvswitch bond'", err)
+        self.assertIn("Key 'lacp' is only valid for interface type 'Open vSwitch bond'", err)
 
     def test_bond_mode_implicit_params(self):
         self.generate('''network:
@@ -398,7 +399,7 @@ ExecStart=/usr/bin/ovs-vsctl set Port bond0 external-ids:netplan/bond_mode=activ
       interfaces: [bond0]
       openvswitch: {}
 ''', expect_fail=True)
-        self.assertIn("bond0: bond mode 'balance-rr' not supported by openvswitch", err)
+        self.assertIn("bond0: bond mode 'balance-rr' not supported by Open vSwitch", err)
 
     def test_bridge_setup(self):
         self.generate('''network:
@@ -508,7 +509,7 @@ ExecStart=/usr/bin/ovs-vsctl set Bridge br0 external-ids:netplan/rstp_enable=tru
       openvswitch:
         fail-mode: glorious
 ''', expect_fail=True)
-        self.assertIn("Key 'fail-mode' is only valid for interface type 'openvswitch bridge'", err)
+        self.assertIn("Key 'fail-mode' is only valid for interface type 'Open vSwitch bridge'", err)
 
     def test_rstp_non_bridge(self):
         err = self.generate('''network:
@@ -518,7 +519,7 @@ ExecStart=/usr/bin/ovs-vsctl set Bridge br0 external-ids:netplan/rstp_enable=tru
       openvswitch:
         rstp: true
 ''', expect_fail=True)
-        self.assertIn("Key is only valid for interface type 'openvswitch bridge'", err)
+        self.assertIn("Key is only valid for interface type 'Open vSwitch bridge'", err)
 
     def test_bridge_set_protocols(self):
         self.generate('''network:
@@ -560,7 +561,7 @@ ExecStart=/usr/bin/ovs-vsctl set Bridge br0 external-ids:netplan/protocols=OpenF
       openvswitch:
         protocols: [OpenFlow10, OpenFlow15]
 ''', expect_fail=True)
-        self.assertIn("Key 'protocols' is only valid for interface type 'openvswitch bridge'", err)
+        self.assertIn("Key 'protocols' is only valid for interface type 'Open vSwitch bridge'", err)
 
     def test_bridge_controller(self):
         self.generate('''network:
@@ -665,7 +666,7 @@ ExecStart=/usr/bin/ovs-vsctl set open_vswitch . external-ids:netplan/global/set-
         controller:
           connection-mode: in-band
 ''', expect_fail=True)
-        self.assertIn("Key 'controller.connection-mode' is only valid for interface type 'openvswitch bridge'", err)
+        self.assertIn("Key 'controller.connection-mode' is only valid for interface type 'Open vSwitch bridge'", err)
         self.assert_ovs({})
         self.assert_networkd({})
 
@@ -678,7 +679,7 @@ ExecStart=/usr/bin/ovs-vsctl set open_vswitch . external-ids:netplan/global/set-
         controller:
           addresses: [unix:/some/socket]
 ''', expect_fail=True)
-        self.assertIn("Key 'controller.addresses' is only valid for interface type 'openvswitch bridge'", err)
+        self.assertIn("Key 'controller.addresses' is only valid for interface type 'Open vSwitch bridge'", err)
         self.assert_ovs({})
         self.assert_networkd({})
 
@@ -713,7 +714,7 @@ ExecStart=/usr/bin/ovs-vsctl set open_vswitch . external-ids:netplan/global/set-
   openvswitch:
     ssl: {}
 ''', expect_fail=True)
-        self.assertIn("ERROR: openvswitch bridge controller target 'ssl:10.10.10.1' needs SSL configuration, but global \
+        self.assertIn("ERROR: Open vSwitch bridge controller target 'ssl:10.10.10.1' needs SSL configuration, but global \
 'openvswitch.ssl' settings are not set", err)
         self.assert_ovs({'cleanup.service': OVS_CLEANUP % {'iface': 'cleanup'}})
         self.assert_networkd({})
@@ -736,7 +737,7 @@ ExecStart=/usr/bin/ovs-vsctl set open_vswitch . external-ids:netplan/global/set-
     ports:
       - [patch0-1]
 ''', expect_fail=True)
-        self.assertIn("An openvswitch peer port sequence must have exactly two entries", err)
+        self.assertIn("An Open vSwitch peer port sequence must have exactly two entries", err)
         self.assertIn("- [patch0-1]", err)
         self.assert_ovs({})
         self.assert_networkd({})
@@ -748,7 +749,7 @@ ExecStart=/usr/bin/ovs-vsctl set open_vswitch . external-ids:netplan/global/set-
     ports:
       - [patch0-1, "patchx", patchy]
 ''', expect_fail=True)
-        self.assertIn("An openvswitch peer port sequence must have exactly two entries", err)
+        self.assertIn("An Open vSwitch peer port sequence must have exactly two entries", err)
         self.assertIn("- [patch0-1, \"patchx\", patchy]", err)
         self.assert_ovs({})
         self.assert_networkd({})
@@ -761,7 +762,7 @@ ExecStart=/usr/bin/ovs-vsctl set open_vswitch . external-ids:netplan/global/set-
       - [patchx, patchy]
       - [patchx, patchz]
 ''', expect_fail=True)
-        self.assertIn("openvswitch port 'patchx' is already assigned to peer 'patchy'", err)
+        self.assertIn("Open vSwitch port 'patchx' is already assigned to peer 'patchy'", err)
         self.assert_ovs({})
         self.assert_networkd({})
 
@@ -773,7 +774,7 @@ ExecStart=/usr/bin/ovs-vsctl set open_vswitch . external-ids:netplan/global/set-
       - [patchx, patchy]
       - [patchz, patchx]
 ''', expect_fail=True)
-        self.assertIn("openvswitch port 'patchx' is already assigned to peer 'patchy'", err)
+        self.assertIn("Open vSwitch port 'patchx' is already assigned to peer 'patchy'", err)
         self.assert_ovs({})
         self.assert_networkd({})
 
@@ -1058,3 +1059,48 @@ ExecStart=/usr/bin/ovs-vsctl --may-exist add-port ovs-br non-ovs-bond
 ''', expect_fail=True)
         self.assert_ovs({'cleanup.service': OVS_CLEANUP % {'iface': 'cleanup'}})
         self.assertIn('br0: ipv6-address-generation mode is not supported by networkd', err)
+
+    def test_ovs_duplicates_when_parser_needs_second_pass(self):
+        ''' Test case for LP: #2007682
+            The generator shouldn't generate duplicates when the parser
+            needs a second pass.
+        '''
+        self.generate('''network:
+    version: 2
+    bridges:
+      br123:
+        openvswitch:
+          protocols:
+            - OpenFlow10
+            - OpenFlow11
+            - OpenFlow12
+          controller:
+            addresses:
+              - tcp:127.0.0.1:6653
+        interfaces:
+          - nic1
+    ethernets:
+      nic1: {}
+''')
+        self.assert_ovs({'br123.service': OVS_VIRTUAL % {'iface': 'br123', 'extra': '''
+[Service]
+Type=oneshot
+TimeoutStartSec=10s
+ExecStart=/usr/bin/ovs-vsctl --may-exist add-br br123
+ExecStart=/usr/bin/ovs-vsctl --may-exist add-port br123 nic1
+''' + OVS_BR_DEFAULT % {'iface': 'br123'} + ('\
+ExecStart=/usr/bin/ovs-vsctl set Bridge br123 protocols=OpenFlow10,OpenFlow11,OpenFlow12\n\
+ExecStart=/usr/bin/ovs-vsctl set Bridge br123 external-ids:netplan/protocols=OpenFlow10,OpenFlow11,OpenFlow12\n\
+ExecStart=/usr/bin/ovs-vsctl set-controller br123 tcp:127.0.0.1:6653\n\
+ExecStart=/usr/bin/ovs-vsctl set Bridge br123 external-ids:netplan/global/set-controller=tcp:127.0.0.1:6653\n\
+')},
+                         'cleanup.service': OVS_CLEANUP % {'iface': 'cleanup'}})
+
+    def test_both_ports_with_same_name(self):
+        err = self.generate('''network:
+    version: 2
+    openvswitch:
+      ports:
+        - [portname, portname]
+''', expect_fail=True)
+        self.assertIn('Open vSwitch patch ports must be of different name', err)

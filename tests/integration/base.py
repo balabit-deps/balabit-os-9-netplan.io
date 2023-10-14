@@ -4,7 +4,7 @@
 # Wifi (mac80211-hwsim). These need to be run in a VM and do change the system
 # configuration.
 #
-# Copyright (C) 2018-2021 Canonical, Ltd.
+# Copyright (C) 2018-2023 Canonical, Ltd.
 # Author: Martin Pitt <martin.pitt@ubuntu.com>
 # Author: Mathieu Trudel-Lapierre <mathieu.trudel-lapierre@canonical.com>
 # Author: Lukas Märdian <slyon@ubuntu.com>
@@ -67,20 +67,19 @@ class IntegrationTestsBase(unittest.TestCase):
         with open('/etc/systemd/network/20-wired.network', 'w') as f:
             f.write('[Match]\nName=eth0 en*\n\n[Network]\nDHCP=yes\nKeepConfiguration=yes')
 
-        # ensure NM doesn't interfere with our test backend (fake eth endpoints & mgmt network)
+        # force-reset NM's unmanaged-devices list (using "=" instead of "+=")
+        # from /usr/lib/NetworkManager/conf.d/10-globally-managed-devices.conf,
+        # to stop it from trampling over our test & mgmt interfaces.
+        # https://pad.lv/1615044
         os.makedirs('/etc/NetworkManager/conf.d', exist_ok=True)
-        with open('/etc/NetworkManager/conf.d/99-test-ignore.conf', 'w') as f:
-            f.write('''[keyfile]
-unmanaged-devices+=interface-name:eth0,interface-name:en*,interface-name:veth42,interface-name:veth43''')
+        with open('/etc/NetworkManager/conf.d/90-test-ignore.conf', 'w') as f:
+            f.write('[keyfile]\nunmanaged-devices=interface-name:en*,eth0,nptestsrv')
         subprocess.check_call(['netplan', 'apply'])
         subprocess.call(['/lib/systemd/systemd-networkd-wait-online', '--quiet', '--timeout=30'])
 
     @classmethod
     def tearDownClass(klass):
-        try:
-            os.remove('/run/NetworkManager/conf.d/test-blacklist.conf')
-        except FileNotFoundError:
-            pass
+        pass
 
     def tearDown(self):
         subprocess.call(['systemctl', 'stop', 'NetworkManager', 'systemd-networkd', 'netplan-wpa-*',
@@ -135,17 +134,15 @@ unmanaged-devices+=interface-name:eth0,interface-name:en*,interface-name:veth42,
         # the correct MAC address
         time.sleep(0.1)
         out = subprocess.check_output(['ip', '-br', 'link', 'show', 'dev', 'eth42'],
-                                      universal_newlines=True)
+                                      text=True)
         klass.dev_e_client_mac = out.split()[2]
         out = subprocess.check_output(['ip', '-br', 'link', 'show', 'dev', 'eth43'],
-                                      universal_newlines=True)
+                                      text=True)
         klass.dev_e2_client_mac = out.split()[2]
 
-        os.makedirs('/run/NetworkManager/conf.d', exist_ok=True)
-
-        # work around https://launchpad.net/bugs/1615044
-        with open('/run/NetworkManager/conf.d/11-globally-managed-devices.conf', 'w') as f:
-            f.write('[keyfile]\nunmanaged-devices=')
+        # don't let NM trample over our test routers
+        with open('/etc/NetworkManager/conf.d/99-test-denylist.conf', 'w') as f:
+            f.write('[keyfile]\nunmanaged-devices+=%s,%s\n' % (klass.dev_e_ap, klass.dev_e2_ap))
 
     @classmethod
     def shutdown_devices(klass):
@@ -160,6 +157,9 @@ unmanaged-devices+=interface-name:eth0,interface-name:en*,interface-name:veth42,
 
         subprocess.call(['ip', 'link', 'del', 'dev', 'mybr'],
                         stderr=subprocess.PIPE)
+        subprocess.call(['ip', 'link', 'del', 'dev', 'nptestsrv'],
+                        stderr=subprocess.PIPE)
+        os.remove('/etc/NetworkManager/conf.d/99-test-denylist.conf')
 
     def setUp(self):
         '''Create test devices and workdir'''
@@ -273,7 +273,7 @@ unmanaged-devices+=interface-name:eth0,interface-name:en*,interface-name:veth42,
         '''Assert that client interface has been created'''
 
         out = subprocess.check_output(['ip', '-d', 'a', 'show', 'dev', iface],
-                                      universal_newlines=True)
+                                      text=True)
         if expected_ip_a:
             for r in expected_ip_a:
                 self.assertRegex(out, r, out)
@@ -290,6 +290,22 @@ unmanaged-devices+=interface-name:eth0,interface-name:en*,interface-name:veth42,
         if 'bond' not in iface:
             self.assertIn('state UP', out)
 
+    def match_veth_by_non_permanent_mac_quirk(self, netdef_id, mac_match):
+        '''
+        We cannot match using PermanentMACAddress= on veth type devices. Still,
+        we need this capability during testing. So we're applying this quirk to
+        install some override config snippet.
+        https://github.com/canonical/netplan/pull/278
+        '''
+        network_dir = '10-netplan-' + netdef_id + '.network.d'
+        link_dir = '10-netplan-' + netdef_id + '.link.d'
+        for dir in [network_dir, link_dir]:
+            path = os.path.join('/run/systemd/network', dir)
+            os.makedirs(path, exist_ok=False)  # cleanup is done in tearDown()
+            with open(os.path.join(path, 'override.conf'), 'w') as f:
+                # clear the PermanentMACAddress= setting and use MACAddress= instead
+                f.write('[Match]\nPermanentMACAddress=\nMACAddress={}'.format(mac_match))
+
     def generate_and_settle(self, wait_interfaces=None, state_dir=None):
         '''Generate config, launch and settle NM and networkd'''
 
@@ -299,7 +315,7 @@ unmanaged-devices+=interface-name:eth0,interface-name:en*,interface-name:veth42,
             cmd = cmd + ['--state', state_dir]
         out = ''
         try:
-            out = subprocess.check_output(cmd, stderr=subprocess.STDOUT, universal_newlines=True)
+            out = subprocess.check_output(cmd, stderr=subprocess.STDOUT, text=True)
         except subprocess.CalledProcessError as e:
             self.assertTrue(False, 'netplan apply failed: {}'.format(e.output))
 
@@ -307,6 +323,12 @@ unmanaged-devices+=interface-name:eth0,interface-name:en*,interface-name:veth42,
             self.fail('systemd units changed without reload')
         # start NM so that we can verify that it does not manage anything
         subprocess.check_call(['systemctl', 'start', 'NetworkManager.service'])
+
+        # Debugging output
+        # out = subprocess.check_output(['NetworkManager', '--print-config'], text=True)
+        # print(out, flush=True)
+        # out = subprocess.check_output(['nmcli', 'dev'], text=True)
+        # print(out, flush=True)
 
         # Wait for interfaces to be ready:
         ifaces = wait_interfaces if wait_interfaces is not None else [self.dev_e_client, self.dev_e2_client]
@@ -359,7 +381,7 @@ unmanaged-devices+=interface-name:eth0,interface-name:en*,interface-name:veth42,
     def wait_output(self, cmd, expected_output, timeout=10):
         for _ in range(timeout):
             try:
-                out = subprocess.check_output(cmd, universal_newlines=True)
+                out = subprocess.check_output(cmd, text=True)
             except subprocess.CalledProcessError:
                 out = ''
             if expected_output in out:
@@ -405,7 +427,7 @@ class IntegrationTestsWifi(IntegrationTestsBase):
         try:
             subprocess.check_call(['modprobe', 'cfg80211'])
             # set regulatory domain "EU", so that we can use 80211.a 5 GHz channels
-            out = subprocess.check_output(['iw', 'reg', 'get'], universal_newlines=True)
+            out = subprocess.check_output(['iw', 'reg', 'get'], text=True)
             m = re.match(r'^(?:global\n)?country (\S+):', out)
             assert m
             klass.orig_country = m.group(1)
@@ -443,8 +465,8 @@ class IntegrationTestsWifi(IntegrationTestsBase):
         klass.dev_w_client = devs[1]
 
         # don't let NM trample over our fake AP
-        with open('/run/NetworkManager/conf.d/test-blacklist.conf', 'w') as f:
-            f.write('[main]\nplugins=keyfile\n[keyfile]\nunmanaged-devices+=nptestsrv,%s\n' % klass.dev_w_ap)
+        with open('/etc/NetworkManager/conf.d/99-test-denylist-wifi.conf', 'w') as f:
+            f.write('[keyfile]\nunmanaged-devices+=%s\n' % klass.dev_w_ap)
 
     @classmethod
     def shutdown_devices(klass):
@@ -453,6 +475,7 @@ class IntegrationTestsWifi(IntegrationTestsBase):
         klass.dev_w_ap = None
         klass.dev_w_client = None
         subprocess.check_call(['rmmod', 'mac80211_hwsim'])
+        os.remove('/etc/NetworkManager/conf.d/99-test-denylist-wifi.conf')
 
     def start_hostapd(self, conf):
         hostapd_conf = os.path.join(self.workdir, 'hostapd.conf')
@@ -489,6 +512,6 @@ class IntegrationTestsWifi(IntegrationTestsBase):
         super().assert_iface_up(iface, expected_ip_a, unexpected_ip_a)
         if iface == self.dev_w_client:
             out = subprocess.check_output(['iw', 'dev', iface, 'link'],
-                                          universal_newlines=True)
+                                          text=True)
             # self.assertIn('Connected to ' + self.mac_w_ap, out)
             self.assertIn('SSID: fake net', out)

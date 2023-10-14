@@ -36,8 +36,7 @@ config_errors = (ConfigurationError, LibNetplanException, RuntimeError)
 
 
 def get_generator_path():
-    # FIXME: meson build uses proper libexecdir (+symlink)
-    return os.environ.get('NETPLAN_GENERATE_PATH', '/lib/netplan/generate')
+    return os.environ.get('NETPLAN_GENERATE_PATH', '/usr/libexec/netplan/generate')
 
 
 def is_nm_snap_enabled():
@@ -45,12 +44,15 @@ def is_nm_snap_enabled():
 
 
 def nmcli(args):  # pragma: nocover (covered in autopkgtest)
-    binary_name = 'nmcli'
+    # 'nmcli' could be /usr/bin/nmcli or /snap/bin/nmcli -> /snap/bin/network-manager.nmcli
+    # PATH is defined in cli/core.py
+    subprocess.check_call(['nmcli'] + args, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
-    if is_nm_snap_enabled():
-        binary_name = 'network-manager.nmcli'
 
-    subprocess.check_call([binary_name] + args, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+def nmcli_out(args: list) -> str:  # pragma: nocover (covered in autopkgtest)
+    # 'nmcli' could be /usr/bin/nmcli or /snap/bin/nmcli -> /snap/bin/network-manager.nmcli
+    # PATH is defined in cli/core.py
+    return subprocess.check_output(['nmcli'] + args, text=True)
 
 
 def nm_running():  # pragma: nocover (covered in autopkgtest)
@@ -85,7 +87,7 @@ def systemctl_network_manager(action, sync=False):
     return systemctl(action, [NM_SERVICE_NAME], sync)  # pragma: nocover (covered in autopkgtest)
 
 
-def systemctl(action, services, sync=False):
+def systemctl(action: str, services: list, sync: bool = False):
     if len(services) >= 1:
         command = ['systemctl', action]
 
@@ -99,7 +101,7 @@ def systemctl(action, services, sync=False):
 
 def networkd_interfaces():
     interfaces = set()
-    out = subprocess.check_output(['networkctl', '--no-pager', '--no-legend'], universal_newlines=True)
+    out = subprocess.check_output(['networkctl', '--no-pager', '--no-legend'], text=True)
     for line in out.splitlines():
         s = line.strip().split(' ')
         if s[0].isnumeric() and s[-1] not in ['unmanaged', 'linger']:
@@ -119,6 +121,16 @@ def networkctl_reconfigure(interfaces):
 def systemctl_is_active(unit_pattern):
     '''Return True if at least one matching unit is running'''
     if subprocess.call(['systemctl', '--quiet', 'is-active', unit_pattern]) == 0:
+        return True
+    return False
+
+
+def systemctl_is_masked(unit_pattern):
+    '''Return True if output is "masked" or "masked-runtime"'''
+    res = subprocess.run(['systemctl', 'is-enabled', unit_pattern],
+                         stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                         text=True)
+    if res.returncode > 0 and 'masked' in res.stdout:
         return True
     return False
 

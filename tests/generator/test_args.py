@@ -74,7 +74,7 @@ class TestConfigArgs(TestBase):
   ethernets:
     eth0:
       dhcp4: true''', expect_fail=True, extra_args=['/non/existing/config'])
-        self.assertEqual(err, 'Cannot open /non/existing/config: No such file or directory\n')
+        self.assertEqual(err, 'Cannot stat /non/existing/config: No such file or directory\n')
         self.assertEqual(os.listdir(self.workdir.name), ['etc'])
 
     def test_help(self):
@@ -89,7 +89,7 @@ class TestConfigArgs(TestBase):
 
         p = subprocess.Popen([exe_generate, '--root-dir', self.workdir.name, '--help'],
                              stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-                             universal_newlines=True)
+                             text=True)
         (out, err) = p.communicate()
         self.assertEqual(err, '')
         self.assertEqual(p.returncode, 0)
@@ -99,7 +99,7 @@ class TestConfigArgs(TestBase):
     def test_unknown_cli_args(self):
         p = subprocess.Popen([exe_generate, '--foo'],
                              stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-                             universal_newlines=True)
+                             text=True)
         (out, err) = p.communicate()
         self.assertIn('nknown option --foo', err)
         self.assertNotEqual(p.returncode, 0)

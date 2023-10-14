@@ -4,7 +4,7 @@ name: Autopkgtest CI
 # events but only for the main branch
 on:
   push:
-    branches: [ main ]
+    branches: [ main, 'stable/**' ]
   pull_request:
     branches: [ '**' ]
 
@@ -18,6 +18,10 @@ jobs:
     steps:
       # Checks-out your repository under $GITHUB_WORKSPACE, so your job can access it
       - uses: actions/checkout@v2
+      # Setup LXD + Docker fixes
+      - uses: canonical/setup-lxd@v0.1.1
+        with:
+          channel: latest/stable  # switch from distro's LTS channel to latest/stable
       - run: |
           git fetch --unshallow --tags
       # Install openvswitch-switch to make the OVS integration tests work
@@ -28,24 +32,19 @@ jobs:
           sudo sed -i '/deb-src/s/^# //' /etc/apt/sources.list
           sudo apt update
           sudo apt install autopkgtest ubuntu-dev-tools devscripts openvswitch-switch linux-modules-extra-$(uname -r)
-          sudo snap install lxd
-          sudo lxd init --auto --storage-backend=dir
       # work around LP: #1878225 as fallback
       - name: Preparing autopkgtest-build-lxd
         run: |
-          # Fix Docker blocking LXD networking:
-          # https://discuss.linuxcontainers.org/t/9953/4
-          sudo iptables -I DOCKER-USER  -j ACCEPT
           sudo patch /usr/bin/autopkgtest-build-lxd .github/workflows/snapd.patch
-          sudo autopkgtest-build-lxd ubuntu-daily:jammy
+          autopkgtest-build-lxd ubuntu-daily:jammy
       - name: Prepare test
         run: |
           pull-lp-source netplan.io
           cp -r netplan.io-*/debian .
           rm -r debian/patches/  # clear any distro patches
-          # temporary until 'ethtool' is a proper test dependency
-          sed -i 's/wpasupplicant,/wpasupplicant, ethtool,/g' debian/tests/control
           dch -v $(git describe --tags) "Autopkgtest CI testing (Jammy)"
       - name: Run autopkgtest (incl. build)
         run: |
-          sudo autopkgtest . -U --env=DPKG_GENSYMBOLS_CHECK_LEVEL=0 --env=DEB_BUILD_OPTIONS=nocheck -- lxd autopkgtest/ubuntu/jammy/amd64
+          # using --setup-commands temporarily to install:
+          # cmocka/pytest/rich/ethtool until they become proper test-deps
+          autopkgtest . --setup-commands='apt -y install ethtool python3-rich python3-pytest python3-pytest-cov libcmocka-dev' -U --env=DPKG_GENSYMBOLS_CHECK_LEVEL=0 --env=DEB_BUILD_OPTIONS=nocheck -- lxd autopkgtest/ubuntu/jammy/amd64
