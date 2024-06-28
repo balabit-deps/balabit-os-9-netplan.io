@@ -1,0 +1,765 @@
+From: Danilo Egea Gondolfo <danilogondolfo@gmail.com>
+Date: Wed, 29 May 2024 14:50:55 +0100
+Subject: libnetplan: escape control characters
+
+Control characters are escaped in the parser using glib's g_strescape.
+Quotes and backslashes were added to the list of exception.
+
+In places where double quotes are not escaped, such as netdef IDs as it
+is allowed as interface names, they are escaped as needed when
+generating back end configuration.
+
+To support escaping in wpa_supplicant configuration, the syntax for
+setting the SSID was changed to 'ssid=P"string here"'. With that,
+escaping is support in a printf-style.
+---
+ src/networkd.c                 | 32 ++++++++++-----
+ src/nm.c                       | 21 ++++++----
+ src/parse.c                    | 93 +++++++++++++++++++++++++++---------------
+ src/util-internal.h            |  3 ++
+ src/util.c                     | 11 +++++
+ tests/generator/test_auth.py   | 20 ++++-----
+ tests/generator/test_common.py | 36 +++++++++++++++-
+ tests/generator/test_wifis.py  | 60 ++++++++++++++++++++++-----
+ 8 files changed, 203 insertions(+), 73 deletions(-)
+
+diff --git a/src/networkd.c b/src/networkd.c
+index 7420172..a75634b 100644
+--- a/src/networkd.c
++++ b/src/networkd.c
+@@ -988,7 +988,8 @@ write_rules_file(const NetplanNetDefinition* def, const char* rootdir)
+     g_string_append(s, "SUBSYSTEM==\"net\", ACTION==\"add\", ");
+ 
+     if (def->match.driver) {
+-        g_string_append_printf(s,"DRIVERS==\"%s\", ", def->match.driver);
++        g_autofree char* driver = _netplan_scrub_string(def->match.driver);
++        g_string_append_printf(s,"DRIVERS==\"%s\", ", driver);
+     } else {
+         g_string_append(s, "DRIVERS==\"?*\", ");
+     }
+@@ -996,7 +997,8 @@ write_rules_file(const NetplanNetDefinition* def, const char* rootdir)
+     if (def->match.mac)
+         g_string_append_printf(s, "ATTR{address}==\"%s\", ", def->match.mac);
+ 
+-    g_string_append_printf(s, "NAME=\"%s\"\n", def->set_name);
++    g_autofree char* set_name = _netplan_scrub_string(def->set_name);
++    g_string_append_printf(s, "NAME=\"%s\"\n", set_name);
+ 
+     _netplan_g_string_free_to_file_with_permissions(s, rootdir, path, NULL, "root", "root", 0640);
+ }
+@@ -1053,10 +1055,12 @@ append_wpa_auth_conf(GString* s, const NetplanAuthenticationSettings* auth, cons
+     }
+ 
+     if (auth->identity) {
+-        g_string_append_printf(s, "  identity=\"%s\"\n", auth->identity);
++        g_autofree char* identity = _netplan_scrub_string(auth->identity);
++        g_string_append_printf(s, "  identity=\"%s\"\n", identity);
+     }
+     if (auth->anonymous_identity) {
+-        g_string_append_printf(s, "  anonymous_identity=\"%s\"\n", auth->anonymous_identity);
++        g_autofree char* anonymous_identity = _netplan_scrub_string(auth->anonymous_identity);
++        g_string_append_printf(s, "  anonymous_identity=\"%s\"\n", anonymous_identity);
+     }
+     if (auth->password) {
+         if (auth->key_management == NETPLAN_AUTH_KEY_MANAGEMENT_WPA_PSK ||
+@@ -1088,19 +1092,23 @@ append_wpa_auth_conf(GString* s, const NetplanAuthenticationSettings* auth, cons
+         }
+     }
+     if (auth->ca_certificate) {
+-        g_string_append_printf(s, "  ca_cert=\"%s\"\n", auth->ca_certificate);
++        g_autofree char* ca_certificate = _netplan_scrub_string(auth->ca_certificate);
++        g_string_append_printf(s, "  ca_cert=\"%s\"\n", ca_certificate);
+     }
+     if (auth->client_certificate) {
+-        g_string_append_printf(s, "  client_cert=\"%s\"\n", auth->client_certificate);
++        g_autofree char* client_certificate = _netplan_scrub_string(auth->client_certificate);
++        g_string_append_printf(s, "  client_cert=\"%s\"\n", client_certificate);
+     }
+     if (auth->client_key) {
+-        g_string_append_printf(s, "  private_key=\"%s\"\n", auth->client_key);
++        g_autofree char* client_key = _netplan_scrub_string(auth->client_key);
++        g_string_append_printf(s, "  private_key=\"%s\"\n", client_key);
+     }
+     if (auth->client_key_password) {
+         g_string_append_printf(s, "  private_key_passwd=\"%s\"\n", auth->client_key_password);
+     }
+     if (auth->phase2_auth) {
+-        g_string_append_printf(s, "  phase2=\"auth=%s\"\n", auth->phase2_auth);
++        g_autofree char* phase2_auth = _netplan_scrub_string(auth->phase2_auth);
++        g_string_append_printf(s, "  phase2=\"auth=%s\"\n", phase2_auth);
+     }
+     return TRUE;
+ }
+@@ -1149,12 +1157,14 @@ write_wpa_conf(const NetplanNetDefinition* def, const char* rootdir, GError** er
+         }
+         /* available as of wpa_supplicant version 0.6.7 */
+         if (def->regulatory_domain) {
+-            g_string_append_printf(s, "country=%s\n", def->regulatory_domain);
++            g_autofree char* regdom = _netplan_scrub_string(def->regulatory_domain);
++            g_string_append_printf(s, "country=%s\n", regdom);
+         }
+         NetplanWifiAccessPoint* ap;
+         g_hash_table_iter_init(&iter, def->access_points);
+         while (g_hash_table_iter_next(&iter, NULL, (gpointer) &ap)) {
+-            g_string_append_printf(s, "network={\n  ssid=\"%s\"\n", ap->ssid);
++            g_autofree char* ssid = _netplan_scrub_string(ap->ssid);
++            g_string_append_printf(s, "network={\n  ssid=P\"%s\"\n", ssid);
+             if (ap->bssid) {
+                 g_string_append_printf(s, "  bssid=%s\n", ap->bssid);
+             }
+@@ -1201,7 +1211,7 @@ write_wpa_conf(const NetplanNetDefinition* def, const char* rootdir, GError** er
+ 
+             /* wifi auth trumps netdef auth */
+             if (ap->has_auth) {
+-                if (!append_wpa_auth_conf(s, &ap->auth, ap->ssid, error)) {
++                if (!append_wpa_auth_conf(s, &ap->auth, ssid, error)) {
+                     g_string_free(s, TRUE);
+                     return FALSE;
+                 }
+diff --git a/src/nm.c b/src/nm.c
+index 392963c..158bff0 100644
+--- a/src/nm.c
++++ b/src/nm.c
+@@ -1011,28 +1011,30 @@ netplan_state_finish_nm_write(
+         GString *tmp = NULL;
+         guint unmanaged = nd->backend == NETPLAN_BACKEND_NM ? 0 : 1;
+ 
++        g_autofree char* netdef_id = _netplan_scrub_string(nd->id);
+         /* Special case: manage or ignore any device of given type on empty "match: {}" stanza */
+         if (nd->has_match && !nd->match.driver && !nd->match.mac && !nd->match.original_name) {
+             nm_type = type_str(nd);
+             g_assert(nm_type);
+             g_string_append_printf(nm_conf, "[device-netplan.%s.%s]\nmatch-device=type:%s\n"
+                                             "managed=%d\n\n", netplan_def_type_name(nd->type),
+-                                            nd->id, nm_type, !unmanaged);
++                                            netdef_id, nm_type, !unmanaged);
+         }
+         /* Normal case: manage or ignore devices by specific udev rules */
+         else {
+             const gchar *prefix = "SUBSYSTEM==\"net\", ACTION==\"add|change|move\",";
+             const gchar *suffix = nd->backend == NETPLAN_BACKEND_NM ? " ENV{NM_UNMANAGED}=\"0\"\n" : " ENV{NM_UNMANAGED}=\"1\"\n";
+             g_string_append_printf(udev_rules, "# netplan: network.%s.%s (on NetworkManager %s)\n",
+-                                   netplan_def_type_name(nd->type), nd->id,
++                                   netplan_def_type_name(nd->type), netdef_id,
+                                    unmanaged ? "deny-list" : "allow-list");
+             /* Match by explicit interface name, if possible */
+             if (nd->set_name) {
+                 // simple case: explicit new interface name
+-                g_string_append_printf(udev_rules, "%s ENV{ID_NET_NAME}==\"%s\",%s", prefix, nd->set_name, suffix);
++                g_autofree char* set_name = _netplan_scrub_string(nd->set_name);
++                g_string_append_printf(udev_rules, "%s ENV{ID_NET_NAME}==\"%s\",%s", prefix, set_name, suffix);
+             } else if (!nd->has_match) {
+                 // simple case: explicit netplan ID is interface name
+-                g_string_append_printf(udev_rules, "%s ENV{ID_NET_NAME}==\"%s\",%s", prefix, nd->id, suffix);
++                g_string_append_printf(udev_rules, "%s ENV{ID_NET_NAME}==\"%s\",%s", prefix, netdef_id, suffix);
+             }
+             /* Also, match by explicit (new) MAC, if available */
+             if (nd->set_mac) {
+@@ -1048,9 +1050,10 @@ netplan_state_finish_nm_write(
+                 // match on original name glob
+                 // TODO: maybe support matching on multiple name globs in the future (like drivers)
+                 g_string_append(udev_rules, prefix);
+-                if (nd->match.original_name)
+-                    g_string_append_printf(udev_rules, " ENV{ID_NET_NAME}==\"%s\",", nd->match.original_name);
+-
++                if (nd->match.original_name) {
++                    g_autofree char* original_name = _netplan_scrub_string(nd->match.original_name);
++                    g_string_append_printf(udev_rules, " ENV{ID_NET_NAME}==\"%s\",", original_name);
++                }
+                 // match on (explicit) MAC address. Yes this would be unique on its own, but we
+                 // keep it within the "full match" to make the logic more comprehensible.
+                 if (nd->match.mac) {
+@@ -1068,7 +1071,9 @@ netplan_state_finish_nm_write(
+                         g_strfreev(split);
+                     } else
+                         drivers = g_strdup(nd->match.driver);
+-                    g_string_append_printf(udev_rules, " ENV{ID_NET_DRIVER}==\"%s\",", drivers);
++
++                    g_autofree char* escaped_drivers = _netplan_scrub_string(drivers);
++                    g_string_append_printf(udev_rules, " ENV{ID_NET_DRIVER}==\"%s\",", escaped_drivers);
+                     g_free(drivers);
+                 }
+                 g_string_append(udev_rules, suffix);
+diff --git a/src/parse.c b/src/parse.c
+index 3292a9b..e52d6f4 100644
+--- a/src/parse.c
++++ b/src/parse.c
+@@ -59,6 +59,16 @@ extern NetplanState global_state;
+ 
+ NetplanParser global_parser = {0};
+ 
++/*
++ * We use g_strescape to escape control characters from the input.
++ * Besides control characters, g_strescape will also escape double quotes and backslashes.
++ * Quotes are escaped at configuration generation time as needed, as they might be part of passwords for example.
++ * Escaping backslashes in the parser affects "netplan set" as it will always escape \'s from
++ * the input and update YAMLs with all the \'s escaped again.
++*/
++static char* STRESCAPE_EXCEPTIONS = "\"\\";
++
++
+ /**
+  * Load YAML file into a yaml_document_t.
+  *
+@@ -362,7 +372,7 @@ handle_generic_str(NetplanParser* npp, yaml_node_t* node, void* entryptr, const
+     guint offset = GPOINTER_TO_UINT(data);
+     char** dest = (char**) ((void*) entryptr + offset);
+     g_free(*dest);
+-    *dest = g_strdup(scalar(node));
++    *dest = g_strescape(scalar(node), STRESCAPE_EXCEPTIONS);
+     mark_data_as_dirty(npp, dest);
+     return TRUE;
+ }
+@@ -477,22 +487,25 @@ handle_generic_map(NetplanParser *npp, yaml_node_t* node, const char* key_prefix
+         assert_type(npp, key, YAML_SCALAR_NODE);
+         assert_type(npp, value, YAML_SCALAR_NODE);
+ 
++        g_autofree char* escaped_key = g_strescape(scalar(key), STRESCAPE_EXCEPTIONS);
++        g_autofree char* escaped_value = g_strescape(scalar(value), STRESCAPE_EXCEPTIONS);
++
+         if (key_prefix && npp->null_fields) {
+             g_autofree char* full_key = NULL;
+-            full_key = g_strdup_printf("%s\t%s", key_prefix, key->data.scalar.value);
++            full_key = g_strdup_printf("%s\t%s", key_prefix, escaped_key);
+             if (g_hash_table_contains(npp->null_fields, full_key))
+                 continue;
+         }
+ 
+         char* stored_value = NULL;
+-        if (g_hash_table_lookup_extended(*map, scalar(key), NULL, (void**)&stored_value)) {
++        if (g_hash_table_lookup_extended(*map, escaped_key, NULL, (void**)&stored_value)) {
+             /* We can safely skip this if it is the exact key/value match
+              * (probably caused by multi-pass processing) */
+-            if (g_strcmp0(stored_value, scalar(value)) == 0)
++            if (g_strcmp0(stored_value, escaped_value) == 0)
+                 continue;
+-            return yaml_error(npp, node, error, "duplicate map entry '%s'", scalar(key));
++            return yaml_error(npp, node, error, "duplicate map entry '%s'", escaped_key);
+         } else
+-            g_hash_table_insert(*map, g_strdup(scalar(key)), g_strdup(scalar(value)));
++            g_hash_table_insert(*map, g_strdup(escaped_key), g_strdup(escaped_value));
+     }
+     mark_data_as_dirty(npp, map);
+ 
+@@ -515,20 +528,26 @@ handle_generic_datalist(NetplanParser *npp, yaml_node_t* node, const char* key_p
+     for (yaml_node_pair_t* entry = node->data.mapping.pairs.start; entry < node->data.mapping.pairs.top; entry++) {
+         yaml_node_t* key, *value;
+         g_autofree char* full_key = NULL;
++        g_autofree char* escaped_key = NULL;
++        g_autofree char* escaped_value = NULL;
+ 
+         key = yaml_document_get_node(&npp->doc, entry->key);
+         value = yaml_document_get_node(&npp->doc, entry->value);
+ 
+         assert_type(npp, key, YAML_SCALAR_NODE);
+         assert_type(npp, value, YAML_SCALAR_NODE);
++
++        escaped_key = g_strescape(scalar(key), STRESCAPE_EXCEPTIONS);
++        escaped_value = g_strescape(scalar(value), STRESCAPE_EXCEPTIONS);
++
+         if (npp->null_fields && key_prefix) {
+-            full_key = g_strdup_printf("%s\t%s", key_prefix, scalar(key));
++            full_key = g_strdup_printf("%s\t%s", key_prefix, escaped_key);
+             if (g_hash_table_contains(npp->null_fields, full_key))
+                 continue;
+         }
+ 
+-        g_datalist_id_set_data_full(list, g_quark_from_string(scalar(key)),
+-                                    g_strdup(scalar(value)), g_free);
++        g_datalist_id_set_data_full(list, g_quark_from_string(escaped_key),
++                                    g_strdup(escaped_value), g_free);
+     }
+     mark_data_as_dirty(npp, list);
+ 
+@@ -832,13 +851,14 @@ handle_match_driver(NetplanParser* npp, yaml_node_t* node, const char* key_prefi
+         for (yaml_node_item_t *iter = node->data.sequence.items.start; iter < node->data.sequence.items.top; iter++) {
+             elem = yaml_document_get_node(&npp->doc, *iter);
+             assert_type(npp, elem, YAML_SCALAR_NODE);
+-            if (g_strrstr(scalar(elem), " "))
++            g_autofree char* escaped_elem = g_strescape(scalar(elem), STRESCAPE_EXCEPTIONS);
++            if (g_strrstr(escaped_elem, " "))
+                 return yaml_error(npp, node, error, "A 'driver' glob cannot contain whitespace");
+ 
+             if (!sequence)
+-                sequence = g_string_new(scalar(elem));
++                sequence = g_string_new(escaped_elem);
+             else
+-                g_string_append_printf(sequence, "\t%s", scalar(elem)); /* tab separated */
++                g_string_append_printf(sequence, "\t%s", escaped_elem); /* tab separated */
+         }
+ 
+         if (!sequence)
+@@ -871,7 +891,7 @@ handle_auth_str(NetplanParser* npp, yaml_node_t* node, const void* data, GError*
+     guint offset = GPOINTER_TO_UINT(data);
+     char** dest = (char**) ((void*) npp->current.auth + offset);
+     g_free(*dest);
+-    *dest = g_strdup(scalar(node));
++    *dest = g_strescape(scalar(node), STRESCAPE_EXCEPTIONS);
+     mark_data_as_dirty(npp, dest);
+     return TRUE;
+ }
+@@ -993,7 +1013,7 @@ handle_access_point_password(NetplanParser* npp, yaml_node_t* node, const void*
+     access_point->has_auth = TRUE;
+     access_point->auth.key_management = NETPLAN_AUTH_KEY_MANAGEMENT_WPA_PSK;
+     g_free(access_point->auth.password);
+-    access_point->auth.password = g_strdup(scalar(node));
++    access_point->auth.password = g_strescape(scalar(node), STRESCAPE_EXCEPTIONS);
+     return TRUE;
+ }
+ 
+@@ -1352,6 +1372,7 @@ handle_wifi_access_points(NetplanParser* npp, yaml_node_t* node, const char* key
+     for (yaml_node_pair_t* entry = node->data.mapping.pairs.start; entry < node->data.mapping.pairs.top; entry++) {
+         NetplanWifiAccessPoint *access_point = NULL;
+         g_autofree char* full_key = NULL;
++        g_autofree char* escaped_key = NULL;
+         yaml_node_t* key, *value;
+         gboolean ret = TRUE;
+ 
+@@ -1360,15 +1381,17 @@ handle_wifi_access_points(NetplanParser* npp, yaml_node_t* node, const char* key
+         value = yaml_document_get_node(&npp->doc, entry->value);
+         assert_type(npp, value, YAML_MAPPING_NODE);
+ 
++        escaped_key = g_strescape(scalar(key), STRESCAPE_EXCEPTIONS);
++
+         if (key_prefix && npp->null_fields) {
+-            full_key = g_strdup_printf("%s\t%s", key_prefix, key->data.scalar.value);
++            full_key = g_strdup_printf("%s\t%s", key_prefix, escaped_key);
+             if (g_hash_table_contains(npp->null_fields, full_key))
+                 continue;
+         }
+ 
+         g_assert(access_point == NULL);
+         access_point = g_new0(NetplanWifiAccessPoint, 1);
+-        access_point->ssid = g_strdup(scalar(key));
++        access_point->ssid = g_strdup(escaped_key);
+         g_debug("%s: adding wifi AP '%s'", npp->current.netdef->id, access_point->ssid);
+ 
+         /* Check if there's already an SSID with that name */
+@@ -1499,15 +1522,16 @@ handle_nameservers_search(NetplanParser* npp, yaml_node_t* node, const void* _,
+     for (yaml_node_item_t *i = node->data.sequence.items.start; i < node->data.sequence.items.top; i++) {
+         yaml_node_t *entry = yaml_document_get_node(&npp->doc, *i);
+         assert_type(npp, entry, YAML_SCALAR_NODE);
++        g_autofree char* escaped_entry = g_strescape(scalar(entry), STRESCAPE_EXCEPTIONS);
+ 
+         if (!npp->current.netdef->search_domains)
+             npp->current.netdef->search_domains = g_array_new(FALSE, FALSE, sizeof(char*));
+ 
+-        if (!is_string_in_array(npp->current.netdef->search_domains, scalar(entry))) {
+-            char* s = g_strdup(scalar(entry));
++        if (!is_string_in_array(npp->current.netdef->search_domains, escaped_entry)) {
++            char* s = g_strdup(escaped_entry);
+             g_array_append_val(npp->current.netdef->search_domains, s);
+         } else {
+-            g_debug("%s: Search domain '%s' has already been added", npp->current.netdef->id, scalar(entry));
++            g_debug("%s: Search domain '%s' has already been added", npp->current.netdef->id, escaped_entry);
+         }
+     }
+     mark_data_as_dirty(npp, &npp->current.netdef->search_domains);
+@@ -2606,19 +2630,19 @@ handle_ovs_bridge_controller_addresses(NetplanParser* npp, yaml_node_t* node, co
+ 
+         /* Format: [p]unix:file */
+         if (is_unix && vec[1] != NULL && vec[2] == NULL) {
+-            char* s = g_strdup(scalar(entry));
++            char* s = g_strescape(scalar(entry), STRESCAPE_EXCEPTIONS);
+             g_array_append_val(npp->current.netdef->ovs_settings.controller.addresses, s);
+             g_strfreev(vec);
+             continue;
+         /* Format tcp:host[:port] or ssl:host[:port] */
+         } else if (is_host && validate_ovs_target(TRUE, vec[1])) {
+-            char* s = g_strdup(scalar(entry));
++            char* s = g_strescape(scalar(entry), STRESCAPE_EXCEPTIONS);
+             g_array_append_val(npp->current.netdef->ovs_settings.controller.addresses, s);
+             g_strfreev(vec);
+             continue;
+         /* Format ptcp:[port][:host] or pssl:[port][:host] */
+         } else if (is_port && validate_ovs_target(FALSE, vec[1])) {
+-            char* s = g_strdup(scalar(entry));
++            char* s = g_strescape(scalar(entry), STRESCAPE_EXCEPTIONS);
+             g_array_append_val(npp->current.netdef->ovs_settings.controller.addresses, s);
+             g_strfreev(vec);
+             continue;
+@@ -2915,6 +2939,8 @@ handle_network_ovs_settings_global_ports(NetplanParser* npp, yaml_node_t* node,
+     NetplanNetDefinition *component2 = NULL;
+ 
+     for (yaml_node_item_t *iter = node->data.sequence.items.start; iter < node->data.sequence.items.top; iter++) {
++        g_autofree char* escaped_port = NULL;
++        g_autofree char* escaped_peer = NULL;
+         pair = yaml_document_get_node(&npp->doc, *iter);
+         assert_type(npp, pair, YAML_SEQUENCE_NODE);
+ 
+@@ -2929,11 +2955,14 @@ handle_network_ovs_settings_global_ports(NetplanParser* npp, yaml_node_t* node,
+         peer = yaml_document_get_node(&npp->doc, *(item+1));
+         assert_type(npp, peer, YAML_SCALAR_NODE);
+ 
++        escaped_port = g_strescape(scalar(port), STRESCAPE_EXCEPTIONS);
++        escaped_peer = g_strescape(scalar(peer), STRESCAPE_EXCEPTIONS);
++
+         /* Create port 1 netdef */
+-        component1 = npp->parsed_defs ? g_hash_table_lookup(npp->parsed_defs, scalar(port)) : NULL;
++        component1 = npp->parsed_defs ? g_hash_table_lookup(npp->parsed_defs, escaped_port) : NULL;
+         if (!component1) {
+-            component1 = netplan_netdef_new(npp, scalar(port), NETPLAN_DEF_TYPE_PORT, NETPLAN_BACKEND_OVS);
+-            if (g_hash_table_remove(npp->missing_id, scalar(port)))
++            component1 = netplan_netdef_new(npp, escaped_port, NETPLAN_DEF_TYPE_PORT, NETPLAN_BACKEND_OVS);
++            if (g_hash_table_remove(npp->missing_id, escaped_port))
+                 npp->missing_ids_found++;
+         }
+ 
+@@ -2944,15 +2973,15 @@ handle_network_ovs_settings_global_ports(NetplanParser* npp, yaml_node_t* node,
+             component1->filepath = g_strdup(npp->current.filepath);
+         }
+ 
+-        if (component1->peer && g_strcmp0(component1->peer, scalar(peer)))
++        if (component1->peer && g_strcmp0(component1->peer, escaped_peer))
+             return yaml_error(npp, port, error, "Open vSwitch port '%s' is already assigned to peer '%s'",
+                               component1->id, component1->peer);
+ 
+         /* Create port 2 (peer) netdef */
+-        component2 = npp->parsed_defs ? g_hash_table_lookup(npp->parsed_defs, scalar(peer)) : NULL;
++        component2 = npp->parsed_defs ? g_hash_table_lookup(npp->parsed_defs, escaped_peer) : NULL;
+         if (!component2) {
+-            component2 = netplan_netdef_new(npp, scalar(peer), NETPLAN_DEF_TYPE_PORT, NETPLAN_BACKEND_OVS);
+-            if (g_hash_table_remove(npp->missing_id, scalar(peer)))
++            component2 = netplan_netdef_new(npp, escaped_peer, NETPLAN_DEF_TYPE_PORT, NETPLAN_BACKEND_OVS);
++            if (g_hash_table_remove(npp->missing_id, escaped_peer))
+                 npp->missing_ids_found++;
+         }
+ 
+@@ -2963,12 +2992,12 @@ handle_network_ovs_settings_global_ports(NetplanParser* npp, yaml_node_t* node,
+             component2->filepath = g_strdup(npp->current.filepath);
+         }
+ 
+-        if (component2->peer && g_strcmp0(component2->peer, scalar(port)))
++        if (component2->peer && g_strcmp0(component2->peer, escaped_port))
+             return yaml_error(npp, peer, error, "Open vSwitch port '%s' is already assigned to peer '%s'",
+                               component2->id, component2->peer);
+ 
+-        component1->peer = g_strdup(scalar(peer));
+-        component2->peer = g_strdup(scalar(port));
++        component1->peer = g_strdup(escaped_peer);
++        component2->peer = g_strdup(escaped_port);
+         component1->peer_link = component2;
+         component2->peer_link = component1;
+     }
+diff --git a/src/util-internal.h b/src/util-internal.h
+index f96eaa5..f1932f6 100644
+--- a/src/util-internal.h
++++ b/src/util-internal.h
+@@ -135,3 +135,6 @@ is_route_rule_present(const NetplanNetDefinition* netdef, const NetplanIPRule* r
+ 
+ NETPLAN_INTERNAL gboolean
+ is_string_in_array(GArray* array, const char* value);
++
++gchar*
++_netplan_scrub_string(const char* content);
+diff --git a/src/util.c b/src/util.c
+index dbbea7f..3a1c0e1 100644
+--- a/src/util.c
++++ b/src/util.c
+@@ -1037,3 +1037,14 @@ is_string_in_array(GArray* array, const char* value)
+     }
+     return FALSE;
+ }
++
++gchar*
++_netplan_scrub_string(const char* content)
++{
++    GString* s = g_string_new(content);
++
++    // Escape double quotes
++    g_string_replace(s, "\"", "\\\"", 0);
++
++    return g_string_free(s, FALSE);
++}
+diff --git a/tests/generator/test_auth.py b/tests/generator/test_auth.py
+index aa1c04b..4b32a28 100644
+--- a/tests/generator/test_auth.py
++++ b/tests/generator/test_auth.py
+@@ -92,35 +92,35 @@ class TestNetworkd(TestBase):
+             self.assertIn('ctrl_interface=/run/wpa_supplicant', new_config)
+             self.assertIn('''
+ network={
+-  ssid="peer2peer"
++  ssid=P"peer2peer"
+   mode=1
+   key_mgmt=NONE
+ }
+ ''', new_config)
+             self.assertIn('''
+ network={
+-  ssid="Luke's Home"
++  ssid=P"Luke's Home"
+   key_mgmt=WPA-PSK
+   psk="4lsos3kr1t"
+ }
+ ''', new_config)
+             self.assertIn('''
+ network={
+-  ssid="BobsHome"
++  ssid=P"BobsHome"
+   key_mgmt=WPA-PSK
+   psk=e03ce667c87bc81ca968d9120ca37f89eb09aec3c55b80386e5d772efd6b926e
+ }
+ ''', new_config)
+             self.assertIn('''
+ network={
+-  ssid="BillsHome"
++  ssid=P"BillsHome"
+   key_mgmt=WPA-PSK
+   psk=db3b0acf5653aeaddd5fe034fb9f07175b2864f847b005aaa2f09182d9411b04
+ }
+ ''', new_config)
+             self.assertIn('''
+ network={
+-  ssid="workplace2"
++  ssid=P"workplace2"
+   key_mgmt=WPA-EAP
+   eap=PEAP
+   identity="joe@internal.example.com"
+@@ -130,7 +130,7 @@ network={
+ ''', new_config)
+             self.assertIn('''
+ network={
+-  ssid="workplace"
++  ssid=P"workplace"
+   key_mgmt=WPA-EAP
+   eap=TTLS
+   identity="joe@internal.example.com"
+@@ -140,7 +140,7 @@ network={
+ ''', new_config)
+             self.assertIn('''
+ network={
+-  ssid="workplacehashed"
++  ssid=P"workplacehashed"
+   key_mgmt=WPA-EAP
+   eap=TTLS
+   identity="joe@internal.example.com"
+@@ -150,7 +150,7 @@ network={
+ ''', new_config)
+             self.assertIn('''
+ network={
+-  ssid="customernet"
++  ssid=P"customernet"
+   key_mgmt=WPA-EAP
+   eap=TLS
+   identity="cert-joe@cust.example.com"
+@@ -163,13 +163,13 @@ network={
+ ''', new_config)
+             self.assertIn('''
+ network={
+-  ssid="opennet"
++  ssid=P"opennet"
+   key_mgmt=NONE
+ }
+ ''', new_config)
+             self.assertIn('''
+ network={
+-  ssid="Joe's Home"
++  ssid=P"Joe's Home"
+   key_mgmt=WPA-PSK
+   psk="s0s3kr1t"
+ }
+diff --git a/tests/generator/test_common.py b/tests/generator/test_common.py
+index ad96b78..0eda2d7 100644
+--- a/tests/generator/test_common.py
++++ b/tests/generator/test_common.py
+@@ -19,7 +19,7 @@
+ import os
+ import textwrap
+ 
+-from .base import TestBase, ND_DHCP4, ND_DHCP6, ND_DHCPYES, ND_EMPTY, NM_MANAGED, NM_UNMANAGED
++from .base import UDEV_NO_MAC_RULE, TestBase, ND_DHCP4, ND_DHCP6, ND_DHCPYES, ND_EMPTY, NM_MANAGED, NM_UNMANAGED
+ 
+ 
+ class TestNetworkd(TestBase):
+@@ -817,6 +817,18 @@ RouteMetric=100
+ UseMTU=true
+ '''})
+ 
++    def test_nd_udev_rules_escaped(self):
++        self.generate('''network:
++  version: 2
++  renderer: NetworkManager
++  ethernets:
++    def1:
++      match:
++        driver: "abc\\"xyz\\n0\\n\\n1"
++      set-name: "eth\\"\\n\\nxyz\\n0"''', skip_generated_yaml_validation=True)
++
++        self.assert_networkd_udev({'def1.rules': (UDEV_NO_MAC_RULE % ('abc\\"xyz\\n0\\n\\n1', 'eth\\"\\n\\nxyz\\n0'))})
++
+ 
+ class TestNetworkManager(TestBase):
+ 
+@@ -1322,6 +1334,28 @@ dns=8.8.8.8;
+ method=ignore
+ '''})
+ 
++    def test_nm_udev_rules_escaped(self):
++        self.generate('''network:
++  version: 2
++  renderer: networkd
++  ethernets:
++    eth0:
++      match:
++        name: "eth\\"0"
++      dhcp4: true''')
++        self.assert_nm_udev(NM_UNMANAGED % 'eth\\"0')
++
++        self.generate('''network:
++  version: 2
++  renderer: networkd
++  ethernets:
++    eth0:
++      match:
++        name: "eth0"
++      set-name: "eth\\n0"
++      dhcp4: true''', skip_generated_yaml_validation=True)
++        self.assert_nm_udev(NM_UNMANAGED % 'eth\\n0' + NM_UNMANAGED % 'eth0')
++
+ 
+ class TestForwardDeclaration(TestBase):
+ 
+diff --git a/tests/generator/test_wifis.py b/tests/generator/test_wifis.py
+index a80512e..6e13de4 100644
+--- a/tests/generator/test_wifis.py
++++ b/tests/generator/test_wifis.py
+@@ -65,7 +65,7 @@ class TestNetworkd(TestBase):
+         with open(os.path.join(self.workdir.name, 'run/netplan/wpa-wl0.conf')) as f:
+             new_config = f.read()
+ 
+-            network = 'ssid="{}"\n  freq_list='.format('band-no-channel2')
++            network = 'ssid=P"{}"\n  freq_list='.format('band-no-channel2')
+             freqs_5GHz = [5610, 5310, 5620, 5320, 5630, 5640, 5340, 5035, 5040, 5045, 5055, 5060, 5660, 5680, 5670, 5080, 5690,
+                           5700, 5710, 5720, 5825, 5745, 5755, 5805, 5765, 5160, 5775, 5170, 5480, 5180, 5795, 5190, 5500, 5200,
+                           5510, 5210, 5520, 5220, 5530, 5230, 5540, 5240, 5550, 5250, 5560, 5260, 5570, 5270, 5580, 5280, 5590,
+@@ -76,7 +76,7 @@ class TestNetworkd(TestBase):
+             for freq in freqs_5GHz:
+                 self.assertRegex(new_config, '{}[ 0-9]*{}[ 0-9]*\n'.format(network, freq))
+ 
+-            network = 'ssid="{}"\n  freq_list='.format('band-no-channel')
++            network = 'ssid=P"{}"\n  freq_list='.format('band-no-channel')
+             freqs_24GHz = [2412, 2417, 2422, 2427, 2432, 2442, 2447, 2437, 2452, 2457, 2462, 2467, 2472, 2484]
+             freqs = new_config.split(network)
+             freqs = freqs[1].split('\n')[0]
+@@ -86,20 +86,20 @@ class TestNetworkd(TestBase):
+ 
+             self.assertIn('''
+ network={
+-  ssid="channel-no-band"
++  ssid=P"channel-no-band"
+   key_mgmt=NONE
+ }
+ ''', new_config)
+             self.assertIn('''
+ network={
+-  ssid="peer2peer"
++  ssid=P"peer2peer"
+   mode=1
+   key_mgmt=NONE
+ }
+ ''', new_config)
+             self.assertIn('''
+ network={
+-  ssid="hidden-y"
++  ssid=P"hidden-y"
+   scan_ssid=1
+   key_mgmt=WPA-PSK
+   psk="0bscur1ty"
+@@ -107,14 +107,14 @@ network={
+ ''', new_config)
+             self.assertIn('''
+ network={
+-  ssid="hidden-n"
++  ssid=P"hidden-n"
+   key_mgmt=WPA-PSK
+   psk="5ecur1ty"
+ }
+ ''', new_config)
+             self.assertIn('''
+ network={
+-  ssid="workplace"
++  ssid=P"workplace"
+   bssid=de:ad:be:ef:ca:fe
+   freq_list=5500
+   key_mgmt=WPA-PSK
+@@ -123,7 +123,7 @@ network={
+ ''', new_config)
+             self.assertIn('''
+ network={
+-  ssid="Joe's Home"
++  ssid=P"Joe's Home"
+   bssid=00:11:22:33:44:55
+   freq_list=2462
+   key_mgmt=WPA-PSK
+@@ -299,7 +299,7 @@ LinkLocalAddressing=ipv6
+             self.assertIn('''
+ wowlan_triggers=any disconnect magic_pkt gtk_rekey_failure eap_identity_req four_way_handshake rfkill_release
+ network={
+-  ssid="homenet"
++  ssid=P"homenet"
+   key_mgmt=NONE
+ }
+ ''', new_config)
+@@ -332,7 +332,7 @@ LinkLocalAddressing=ipv6
+             new_config = f.read()
+             self.assertIn('''
+ network={
+-  ssid="homenet"
++  ssid=P"homenet"
+   key_mgmt=NONE
+ }
+ ''', new_config)
+@@ -356,13 +356,51 @@ network={
+         self.assert_wpa_supplicant("wl0", """ctrl_interface=/run/wpa_supplicant
+ 
+ network={
+-  ssid="homenet"
++  ssid=P"homenet"
+   key_mgmt=SAE
+   ieee80211w=2
+   psk="********"
+ }
+ """)
+ 
++    def test_escaping_special_characters(self):
++        self.generate('''network:
++  version: 2
++  wifis:
++    wl0:
++      regulatory-domain: "abc\\n\\n321\\n\\"123"
++      access-points:
++        "abc\\n\\n123\\"x\\ry\\bz":
++          password:  "abc\\n\\n\\n\\"123"
++          auth:
++            key-management: eap
++            anonymous-identity: "abc\\n\\n321\\n\\"123"
++            identity: "abc\\n\\n321\\n\\"123"
++            password: "abc\\n\\n\\n\\"123"
++            ca-certificate: "abc\\n\\n321\\n\\"123"
++            client-certificate: "abc\\n\\n321\\n\\"123"
++            client-key: "abc\\n\\n321\\n\\"123"
++            client-key-password: "abc\\n\\n321\\n\\"123"
++            phase2-auth: "abc\\n\\n321\\n\\"123"
++            ''', skip_generated_yaml_validation=True)
++
++        self.assert_wpa_supplicant("wl0", """ctrl_interface=/run/wpa_supplicant
++
++country=abc\\n\\n321\\n\\"123
++network={
++  ssid=P"abc\\n\\n123\\\"x\\ry\\bz"
++  key_mgmt=WPA-EAP
++  identity="abc\\n\\n321\\n\\\"123"
++  anonymous_identity="abc\\n\\n321\\n\\\"123"
++  password="abc\\n\\n\\n\"123"
++  ca_cert="abc\\n\\n321\\n\\\"123"
++  client_cert="abc\\n\\n321\\n\\\"123"
++  private_key="abc\\n\\n321\\n\\\"123"
++  private_key_passwd="abc\\n\\n321\\n\"123"
++  phase2="auth=abc\\n\\n321\\n\\\"123"
++}
++""")
++
+ 
+ class TestNetworkManager(TestBase):
+ 

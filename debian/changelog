@@ -1,3 +1,31 @@
+netplan.io (0.106.1-7ubuntu0.22.04.4) jammy-security; urgency=medium
+
+  * SECURITY REGRESSION: failure on systems without dbus
+    - debian/netplan.io.postinst: Don't call the generator if no networkd
+      configuration file exists. (LP: #2071333) 
+
+ -- Sudhakar Verma <sudhakar.verma@canonical.com>  Fri, 28 Jun 2024 22:42:13 +0530
+
+netplan.io (0.106.1-7ubuntu0.22.04.3) jammy-security; urgency=medium
+
+  * SECURITY UPDATE: weak permissions on secret files, command injection
+    - d/p/lp2065738/0028-libnetplan-use-more-restrictive-file-permissions.patch:
+      Use more restrictive file permissions to prevent unprivileged users to
+      read sensitive data from back end files (LP: #2065738, #1987842)
+    - CVE-2022-4968
+    - d/p/lp2066258/0029-libnetplan-escape-control-characters.patch:
+      Escape control characters in the parser and double quotes in backend
+      files
+    - d/p/lp2066258/0030-backends-escape-file-paths.patch:
+      Escape special characters in file paths
+    - d/p/lp2066258/0031-backends-escape-semicolons-in-service-units.patch:
+      Escape isolated semicolons in systemd service units (LP: #2066258)
+  * debian/netplan.io.postinst: Add a postinst maintainer script to call the
+    generator. It's needed so the file permissions fixes will be applied
+    automatically, thanks to danilogondolfo 
+
+ -- Sudhakar Verma <sudhakar.verma@canonical.com>  Mon, 24 Jun 2024 23:20:42 +0530
+
 netplan.io (0.106.1-7ubuntu0.22.04.2) jammy; urgency=medium
 
   * Drop d/p/sru-compat/0024-Avoid-unnecessary-export-of-API.patch.

@@ -1,0 +1,287 @@
+From: Danilo Egea Gondolfo <danilogondolfo@gmail.com>
+Date: Thu, 23 May 2024 15:54:43 +0100
+Subject: backends: escape file paths
+
+Escape strings used to build paths with g_uri_escape_string().
+systemd_escape() could also be used but it has the downside of calling
+an external program and, by default, it escapes dashes (which are
+present in files generated from Network Manager for example).
+---
+ src/networkd.c                 | 13 +++++----
+ src/nm.c                       |  5 ++--
+ src/openvswitch.c              | 19 ++++++------
+ src/util.c                     |  7 +++--
+ tests/generator/test_common.py | 65 ++++++++++++++++++++++++++++++++++++++++++
+ tests/generator/test_ovs.py    | 24 ++++++++++++++++
+ 6 files changed, 114 insertions(+), 19 deletions(-)
+
+diff --git a/src/networkd.c b/src/networkd.c
+index a75634b..26babe9 100644
+--- a/src/networkd.c
++++ b/src/networkd.c
+@@ -964,7 +964,8 @@ static void
+ write_rules_file(const NetplanNetDefinition* def, const char* rootdir)
+ {
+     GString* s = NULL;
+-    g_autofree char* path = g_strjoin(NULL, "run/udev/rules.d/99-netplan-", def->id, ".rules", NULL);
++    g_autofree char* escaped_netdef_id = g_uri_escape_string(def->id, NULL, TRUE);
++    g_autofree char* path = g_strjoin(NULL, "run/udev/rules.d/99-netplan-", escaped_netdef_id, ".rules", NULL);
+ 
+     /* do we need to write a .rules file?
+      * It's only required for reliably setting the name of a physical device
+@@ -1144,7 +1145,8 @@ write_wpa_conf(const NetplanNetDefinition* def, const char* rootdir, GError** er
+ {
+     GHashTableIter iter;
+     GString* s = g_string_new("ctrl_interface=/run/wpa_supplicant\n\n");
+-    g_autofree char* path = g_strjoin(NULL, "run/netplan/wpa-", def->id, ".conf", NULL);
++    g_autofree char* escaped_netdef_id = g_uri_escape_string(def->id, NULL, TRUE);
++    g_autofree char* path = g_strjoin(NULL, "run/netplan/wpa-", escaped_netdef_id, ".conf", NULL);
+ 
+     g_debug("%s: Creating wpa_supplicant configuration file %s", def->id, path);
+     if (def->type == NETPLAN_DEF_TYPE_WIFI) {
+@@ -1254,7 +1256,8 @@ netplan_netdef_write_networkd(
+         GError** error)
+ {
+     /* TODO: make use of netplan_netdef_get_output_filename() */
+-    g_autofree char* path_base = g_strjoin(NULL, "run/systemd/network/10-netplan-", def->id, NULL);
++    g_autofree char* escaped_netdef_id = g_uri_escape_string(def->id, NULL, TRUE);
++    g_autofree char* path_base = g_strjoin(NULL, "run/systemd/network/10-netplan-", escaped_netdef_id, NULL);
+     SET_OPT_OUT_PTR(has_been_written, FALSE);
+ 
+     /* We want this for all backends when renaming, as *.link and *.rules files are
+@@ -1276,8 +1279,8 @@ netplan_netdef_write_networkd(
+     }
+ 
+     if (def->type == NETPLAN_DEF_TYPE_WIFI || def->has_auth) {
+-        g_autofree char* link = g_strjoin(NULL, rootdir ?: "", "/run/systemd/system/systemd-networkd.service.wants/netplan-wpa-", def->id, ".service", NULL);
+-        g_autofree char* slink = g_strjoin(NULL, "/run/systemd/system/netplan-wpa-", def->id, ".service", NULL);
++        g_autofree char* link = g_strjoin(NULL, rootdir ?: "", "/run/systemd/system/systemd-networkd.service.wants/netplan-wpa-", escaped_netdef_id, ".service", NULL);
++        g_autofree char* slink = g_strjoin(NULL, "/run/systemd/system/netplan-wpa-", escaped_netdef_id, ".service", NULL);
+         if (def->type == NETPLAN_DEF_TYPE_WIFI && def->has_match) {
+             g_set_error(error, G_MARKUP_ERROR, G_MARKUP_ERROR_INVALID_CONTENT, "ERROR: %s: networkd backend does not support wifi with match:, only by interface name\n", def->id);
+             return FALSE;
+diff --git a/src/nm.c b/src/nm.c
+index 158bff0..792acee 100644
+--- a/src/nm.c
++++ b/src/nm.c
+@@ -885,10 +885,11 @@ write_nm_conf_access_point(const NetplanNetDefinition* def, const char* rootdir,
+         g_datalist_foreach((GData**)&def->backend_settings.passthrough, write_fallback_key_value, kf);
+     }
+ 
++    g_autofree char* escaped_netdef_id = g_uri_escape_string(def->id, NULL, TRUE);
+     if (ap) {
+         g_autofree char* escaped_ssid = g_uri_escape_string(ap->ssid, NULL, TRUE);
+         /* TODO: make use of netplan_netdef_get_output_filename() */
+-        conf_path = g_strjoin(NULL, "run/NetworkManager/system-connections/netplan-", def->id, "-", escaped_ssid, ".nmconnection", NULL);
++        conf_path = g_strjoin(NULL, "run/NetworkManager/system-connections/netplan-", escaped_netdef_id, "-", escaped_ssid, ".nmconnection", NULL);
+ 
+         g_key_file_set_string(kf, "wifi", "ssid", ap->ssid);
+         if (ap->mode < NETPLAN_WIFI_MODE_OTHER)
+@@ -923,7 +924,7 @@ write_nm_conf_access_point(const NetplanNetDefinition* def, const char* rootdir,
+         }
+     } else {
+         /* TODO: make use of netplan_netdef_get_output_filename() */
+-        conf_path = g_strjoin(NULL, "run/NetworkManager/system-connections/netplan-", def->id, ".nmconnection", NULL);
++        conf_path = g_strjoin(NULL, "run/NetworkManager/system-connections/netplan-", escaped_netdef_id, ".nmconnection", NULL);
+         if (def->has_auth) {
+             write_dot1x_auth_parameters(&def->auth, kf);
+         }
+diff --git a/src/openvswitch.c b/src/openvswitch.c
+index 8d132d6..37583f4 100644
+--- a/src/openvswitch.c
++++ b/src/openvswitch.c
+@@ -32,9 +32,9 @@
+ static gboolean
+ write_ovs_systemd_unit(const char* id, const GString* cmds, const char* rootdir, gboolean physical, gboolean cleanup, const char* dependency, GError** error)
+ {
+-    g_autofree gchar* id_escaped = NULL;
+-    g_autofree char* link = g_strjoin(NULL, rootdir ?: "", "/run/systemd/system/systemd-networkd.service.wants/netplan-ovs-", id, ".service", NULL);
+-    g_autofree char* path = g_strjoin(NULL, "/run/systemd/system/netplan-ovs-", id, ".service", NULL);
++    g_autofree char* escaped_netdef_id = g_uri_escape_string(id, NULL, TRUE);
++    g_autofree char* link = g_strjoin(NULL, rootdir ?: "", "/run/systemd/system/systemd-networkd.service.wants/netplan-ovs-", escaped_netdef_id, ".service", NULL);
++    g_autofree char* path = g_strjoin(NULL, "/run/systemd/system/netplan-ovs-", escaped_netdef_id, ".service", NULL);
+ 
+     GString* s = g_string_new("[Unit]\n");
+     g_string_append_printf(s, "Description=OpenVSwitch configuration for %s\n", id);
+@@ -43,9 +43,8 @@ write_ovs_systemd_unit(const char* id, const GString* cmds, const char* rootdir,
+     g_string_append_printf(s, "Wants=ovsdb-server.service\n");
+     g_string_append_printf(s, "After=ovsdb-server.service\n");
+     if (physical) {
+-        id_escaped = systemd_escape((char*) id);
+-        g_string_append_printf(s, "Requires=sys-subsystem-net-devices-%s.device\n", id_escaped);
+-        g_string_append_printf(s, "After=sys-subsystem-net-devices-%s.device\n", id_escaped);
++        g_string_append_printf(s, "Requires=sys-subsystem-net-devices-%s.device\n", escaped_netdef_id);
++        g_string_append_printf(s, "After=sys-subsystem-net-devices-%s.device\n", escaped_netdef_id);
+     }
+     if (!cleanup) {
+         g_string_append_printf(s, "After=netplan-ovs-cleanup.service\n");
+@@ -55,8 +54,9 @@ write_ovs_systemd_unit(const char* id, const GString* cmds, const char* rootdir,
+     }
+     g_string_append(s, "Before=network.target\nWants=network.target\n");
+     if (dependency) {
+-        g_string_append_printf(s, "Requires=netplan-ovs-%s.service\n", dependency);
+-        g_string_append_printf(s, "After=netplan-ovs-%s.service\n", dependency);
++        g_autofree char* escaped_dependency = g_uri_escape_string(dependency, NULL, TRUE);
++        g_string_append_printf(s, "Requires=netplan-ovs-%s.service\n", escaped_dependency);
++        g_string_append_printf(s, "After=netplan-ovs-%s.service\n", escaped_dependency);
+     }
+ 
+     g_string_append(s, "\n[Service]\nType=oneshot\nTimeoutStartSec=10s\n");
+@@ -323,6 +323,7 @@ netplan_netdef_write_ovs(const NetplanState* np_state, const NetplanNetDefinitio
+     gchar* dependency = NULL;
+     const char* type = netplan_type_to_table_name(def->type);
+     g_autofree char* base_config_path = NULL;
++    g_autofree char* escaped_netdef_id = g_uri_escape_string(def->id, NULL, TRUE);
+     char* value = NULL;
+     const NetplanOVSSettings* settings = &np_state->ovs_settings;
+ 
+@@ -413,7 +414,7 @@ netplan_netdef_write_ovs(const NetplanState* np_state, const NetplanNetDefinitio
+ 
+         /* Try writing out a base config */
+         /* TODO: make use of netplan_netdef_get_output_filename() */
+-        base_config_path = g_strjoin(NULL, "run/systemd/network/10-netplan-", def->id, NULL);
++        base_config_path = g_strjoin(NULL, "run/systemd/network/10-netplan-", escaped_netdef_id, NULL);
+         if (!netplan_netdef_write_network_file(np_state, def, rootdir, base_config_path, has_been_written, error))
+             return FALSE;
+     } else {
+diff --git a/src/util.c b/src/util.c
+index 3a1c0e1..9c4ff89 100644
+--- a/src/util.c
++++ b/src/util.c
+@@ -685,17 +685,18 @@ ssize_t
+ netplan_netdef_get_output_filename(const NetplanNetDefinition* netdef, const char* ssid, char* out_buffer, size_t out_buf_size)
+ {
+     g_autofree gchar* conf_path = NULL;
++    g_autofree char* escaped_netdef_id = g_uri_escape_string(netdef->id, NULL, TRUE);
+ 
+     if (netdef->backend == NETPLAN_BACKEND_NM) {
+         if (ssid) {
+             g_autofree char* escaped_ssid = g_uri_escape_string(ssid, NULL, TRUE);
+-            conf_path = g_strjoin(NULL, "/run/NetworkManager/system-connections/netplan-", netdef->id, "-", escaped_ssid, ".nmconnection", NULL);
++            conf_path = g_strjoin(NULL, "/run/NetworkManager/system-connections/netplan-", escaped_netdef_id, "-", escaped_ssid, ".nmconnection", NULL);
+         } else {
+-            conf_path = g_strjoin(NULL, "/run/NetworkManager/system-connections/netplan-", netdef->id, ".nmconnection", NULL);
++            conf_path = g_strjoin(NULL, "/run/NetworkManager/system-connections/netplan-", escaped_netdef_id, ".nmconnection", NULL);
+         }
+ 
+     } else if (netdef->backend == NETPLAN_BACKEND_NETWORKD || netdef->backend == NETPLAN_BACKEND_OVS) {
+-        conf_path = g_strjoin(NULL, "/run/systemd/network/10-netplan-", netdef->id, ".network", NULL);
++        conf_path = g_strjoin(NULL, "/run/systemd/network/10-netplan-", escaped_netdef_id, ".network", NULL);
+     }
+ 
+     if (conf_path)
+diff --git a/tests/generator/test_common.py b/tests/generator/test_common.py
+index 0eda2d7..2eb2cb9 100644
+--- a/tests/generator/test_common.py
++++ b/tests/generator/test_common.py
+@@ -829,6 +829,46 @@ UseMTU=true
+ 
+         self.assert_networkd_udev({'def1.rules': (UDEV_NO_MAC_RULE % ('abc\\"xyz\\n0\\n\\n1', 'eth\\"\\n\\nxyz\\n0'))})
+ 
++    def test_nd_file_paths_escaped(self):
++        self.generate('''network:
++  version: 2
++  ethernets:
++    "abc/../../xyz0":
++      match:
++        driver: "drv"
++      set-name: "eth123"''')
++
++        self.assert_networkd_udev({'abc%2F..%2F..%2Fxyz0.rules': (UDEV_NO_MAC_RULE % ('drv', 'eth123'))})
++        self.assert_networkd({'abc%2F..%2F..%2Fxyz0.network': '''[Match]\nDriver=drv
++Name=eth123
++
++[Network]
++LinkLocalAddressing=ipv6
++''',
++                              'abc%2F..%2F..%2Fxyz0.link': '''[Match]\nDriver=drv\n
++[Link]
++Name=eth123
++WakeOnLan=off
++'''})
++
++        self.generate('''network:
++  version: 2
++  wifis:
++    "abc/../../xyz0":
++      dhcp4: true
++      access-points:
++        "mywifi":
++          password: "aaaaaaaa"''')
++
++        self.assert_wpa_supplicant("abc%2F..%2F..%2Fxyz0", """ctrl_interface=/run/wpa_supplicant
++
++network={
++  ssid=P"mywifi"
++  key_mgmt=WPA-PSK
++  psk="aaaaaaaa"
++}
++""")
++
+ 
+ class TestNetworkManager(TestBase):
+ 
+@@ -1356,6 +1396,31 @@ method=ignore
+       dhcp4: true''', skip_generated_yaml_validation=True)
+         self.assert_nm_udev(NM_UNMANAGED % 'eth\\n0' + NM_UNMANAGED % 'eth0')
+ 
++    def test_nm_file_paths_escaped(self):
++        self.generate('''network:
++  version: 2
++  renderer: NetworkManager
++  ethernets:
++    "abc/../../xyz0":
++      match:
++        driver: "drv"
++      set-name: "eth123"''')
++
++        self.assert_nm({'abc%2F..%2F..%2Fxyz0': '''[connection]
++id=netplan-abc/../../xyz0
++type=ethernet
++interface-name=eth123
++
++[ethernet]
++wake-on-lan=0
++
++[ipv4]
++method=link-local
++
++[ipv6]
++method=ignore
++'''})
++
+ 
+ class TestForwardDeclaration(TestBase):
+ 
+diff --git a/tests/generator/test_ovs.py b/tests/generator/test_ovs.py
+index 307df5f..0d27ff9 100644
+--- a/tests/generator/test_ovs.py
++++ b/tests/generator/test_ovs.py
+@@ -1095,3 +1095,27 @@ ExecStart=/usr/bin/ovs-vsctl set-controller br123 tcp:127.0.0.1:6653\n\
+ ExecStart=/usr/bin/ovs-vsctl set Bridge br123 external-ids:netplan/global/set-controller=tcp:127.0.0.1:6653\n\
+ ')},
+                          'cleanup.service': OVS_CLEANUP % {'iface': 'cleanup'}})
++
++    def test_file_paths_escaped(self):
++        self.generate('''network:
++  version: 2
++  bridges:
++    "abc/../../123":
++      openvswitch: {}
++  vlans:
++    "abc/../../123.100":
++      id: 100
++      link: "abc/../../123"
++''')
++        self.assert_ovs({'abc%2F..%2F..%2F123.service': OVS_BR_EMPTY % {'iface': 'abc/../../123'},
++                         'abc%2F..%2F..%2F123.100.service': OVS_VIRTUAL % {'iface': 'abc/../../123.100', 'extra':
++                                                                           '''Requires=netplan-ovs-abc%2F..%2F..%2F123.service
++After=netplan-ovs-abc%2F..%2F..%2F123.service
++
++[Service]
++Type=oneshot
++TimeoutStartSec=10s
++ExecStart=/usr/bin/ovs-vsctl --may-exist add-br abc/../../123.100 abc/../../123 100
++ExecStart=/usr/bin/ovs-vsctl set Interface abc/../../123.100 external-ids:netplan=true
++'''},
++                         'cleanup.service': OVS_CLEANUP % {'iface': 'cleanup'}})

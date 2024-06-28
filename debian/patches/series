@@ -24,3 +24,7 @@ sru-compat/0025-Revert-ovs-don-t-allow-peers-with-the-same-name.patch
 sru-compat/0026-parse-add-comment-about-OpenFlow16-deprecation.patch
 sru-compat/0026-migrate-fix-looback_only-legacy-test.patch
 sru-compat/0027-Keep-old-file-permission-for-backwards-compatibility.patch
+lp2065738/0028-libnetplan-use-more-restrictive-file-permissions.patch
+lp2066258/0029-libnetplan-escape-control-characters.patch
+lp2066258/0030-backends-escape-file-paths.patch
+lp2066258/0031-backends-escape-semicolons-in-service-units.patch
