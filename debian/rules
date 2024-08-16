@@ -4,3 +4,16 @@ export DEB_BUILD_MAINT_OPTIONS = hardening=+all
 
 %:
 	dh $@ --buildsystem=meson
+
+override_dh_auto_clean:
+	dh_auto_clean
+	make clean
+
+override_dh_auto_configure:
+	dh_auto_configure -- \
+		-Dpython.purelibdir=/usr/lib/python3/dist-packages \
+		-Dpython.platlibdir=/usr/lib/python3/dist-packages
+
+execute_after_dh_auto_install:
+	# Drop __pycache__
+	rm -rf debian/tmp/usr/lib/python3/dist-packages/netplan/__pycache__/

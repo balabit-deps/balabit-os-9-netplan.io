@@ -1,4 +1,4 @@
-Test-Command: systemctl is-active openvswitch-switch.service && ./debian/tests/prep-testbed.sh && python3 tests/integration/run.py --test=ovs || exit 77
+Test-Command: (systemctl is-active openvswitch-switch.service || exit 77) && ./debian/tests/prep-testbed.sh && python3 tests/integration/run.py --test=ovs
 Tests-Directory: tests/integration
 Depends: @,
   systemd-resolved | systemd (<< 251.3-2~),
@@ -156,8 +156,36 @@ Depends: @,
 Restrictions: allow-stderr, needs-root, isolation-container
 Features: test-name=dbus
 
-Test-Command: ./debian/tests/prep-testbed.sh && ./debian/tests/autostart.sh
+Test-Command: ./debian/tests/prep-testbed.sh && python3 tests/integration/run.py --test=dummies
+Tests-Directory: tests/integration
 Depends: @,
+  systemd-resolved | systemd (<< 251.3-2~),
+  network-manager,
+  hostapd,
+  wpasupplicant,
+  dnsmasq-base,
+  libnm0,
+  python3-gi,
+  gir1.2-nm-1.0,
+Restrictions: allow-stderr, needs-root, isolation-container
+Features: test-name=dummies
+
+Test-Command: ./debian/tests/prep-testbed.sh && python3 tests/integration/run.py --test=veths
+Tests-Directory: tests/integration
+Depends: @,
+  systemd-resolved | systemd (<< 251.3-2~),
+  network-manager,
+  hostapd,
+  wpasupplicant,
+  dnsmasq-base,
+  libnm0,
+  python3-gi,
+  gir1.2-nm-1.0,
+Restrictions: allow-stderr, needs-root, isolation-container
+Features: test-name=veths
+
+Test-Command: ./debian/tests/prep-testbed.sh && ./debian/tests/autostart.sh
+Depends: netplan-generator,
   systemd-resolved | systemd (<< 251.3-2~),
   udev
 Restrictions: allow-stderr, needs-root, isolation-container

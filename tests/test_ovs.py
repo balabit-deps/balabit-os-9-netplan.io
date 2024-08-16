@@ -18,9 +18,9 @@
 import unittest
 
 from unittest.mock import patch, call
-from netplan.cli.ovs import OPENVSWITCH_OVS_VSCTL as OVS
+from netplan_cli.cli.ovs import OPENVSWITCH_OVS_VSCTL as OVS
 
-import netplan.cli.ovs as ovs
+import netplan_cli.cli.ovs as ovs
 
 from utils import state_from_yaml
 import tempfile
@@ -126,7 +126,7 @@ Bootstrap: false'''
   ethernets:
     ovs0:
       openvswitch: {}''')
-            self.assertTrue(ovs.is_ovs_interface('ovs0', state.all_defs))
+            self.assertTrue(ovs.is_ovs_interface('ovs0', state.netdefs))
 
     def test_is_ovs_interface_false(self):
         with tempfile.TemporaryDirectory() as root:
@@ -139,7 +139,7 @@ Bootstrap: false'''
       interfaces:
         - eth0
         - eth1''')
-        self.assertFalse(ovs.is_ovs_interface('br0', state.all_defs))
+        self.assertFalse(ovs.is_ovs_interface('br0', state.netdefs))
 
     def test_is_ovs_interface_recursive(self):
         with tempfile.TemporaryDirectory() as root:
@@ -153,4 +153,4 @@ Bootstrap: false'''
   bonds:
     bond0:
       interfaces: [patch1-0, eth0]''')
-        self.assertTrue(ovs.is_ovs_interface('bond0', state.all_defs))
+        self.assertTrue(ovs.is_ovs_interface('bond0', state.netdefs))

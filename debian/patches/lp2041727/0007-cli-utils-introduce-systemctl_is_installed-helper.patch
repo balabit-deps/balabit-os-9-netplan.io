@@ -1,0 +1,66 @@
+From: =?utf-8?q?Lukas_M=C3=A4rdian?= <slyon@ubuntu.com>
+Date: Thu, 25 Jan 2024 12:40:06 +0100
+Subject: cli:utils: introduce systemctl_is_installed helper
+
+This patch was adapted to be used on Ubuntu 22.04 due to a difference
+in the return code of systemctl is-enabled.
+
+Bug-Ubuntu: https://bugs.launchpad.net/ubuntu/+source/netplan.io/+bug/2041727
+Origin: https://github.com/canonical/netplan/pull/421
+---
+ netplan_cli/cli/utils.py | 10 ++++++++++
+ tests/test_utils.py      | 20 ++++++++++++++++++++
+ 2 files changed, 30 insertions(+)
+
+diff --git a/netplan_cli/cli/utils.py b/netplan_cli/cli/utils.py
+index a5f60c9..f913630 100644
+--- a/netplan_cli/cli/utils.py
++++ b/netplan_cli/cli/utils.py
+@@ -148,6 +148,16 @@ def systemctl_is_masked(unit_pattern):
+     return False
+ 
+ 
++def systemctl_is_installed(unit_pattern):
++    '''Return True if returncode is other than a failure (1)'''
++    res = subprocess.run(['systemctl', 'is-enabled', unit_pattern],
++                         stdout=subprocess.PIPE, stderr=subprocess.PIPE,
++                         text=True)
++    if res.returncode != 1:
++        return True
++    return False
++
++
+ def systemctl_daemon_reload():
+     '''Reload systemd unit files from disk and re-calculate its dependencies'''
+     subprocess.check_call(['systemctl', 'daemon-reload'])
+diff --git a/tests/test_utils.py b/tests/test_utils.py
+index b2a1657..eefd334 100644
+--- a/tests/test_utils.py
++++ b/tests/test_utils.py
+@@ -354,6 +354,26 @@ class TestUtils(unittest.TestCase):
+             ['systemctl', 'is-enabled', 'some.service']
+         ])
+ 
++    def test_systemctl_is_installed(self):
++        self.mock_cmd = MockCmd('systemctl')
++        self.mock_cmd.set_returncode(0)
++        path_env = os.environ['PATH']
++        os.environ['PATH'] = os.path.dirname(self.mock_cmd.path) + os.pathsep + path_env
++        self.assertTrue(utils.systemctl_is_installed('some.service'))
++        self.assertEqual(self.mock_cmd.calls(), [
++            ['systemctl', 'is-enabled', 'some.service']
++        ])
++
++    def test_systemctl_is_installed_false(self):
++        self.mock_cmd = MockCmd('systemctl')
++        self.mock_cmd.set_returncode(1)
++        path_env = os.environ['PATH']
++        os.environ['PATH'] = os.path.dirname(self.mock_cmd.path) + os.pathsep + path_env
++        self.assertFalse(utils.systemctl_is_installed('some.service'))
++        self.assertEqual(self.mock_cmd.calls(), [
++            ['systemctl', 'is-enabled', 'some.service']
++        ])
++
+     def test_systemctl_daemon_reload(self):
+         self.mock_cmd = MockCmd('systemctl')
+         path_env = os.environ['PATH']

@@ -1,0 +1,124 @@
+From: Danilo Egea Gondolfo <danilogondolfo@gmail.com>
+Date: Tue, 2 Jul 2024 18:16:06 +0100
+Subject: parse: do not escape all non-ascii bytes
+MIME-Version: 1.0
+Content-Type: text/plain; charset="utf-8"
+Content-Transfer-Encoding: 8bit
+
+g_strescape will transform utf-8 strings in a sequence of escaped octal
+numbers in form of a string. That happens because g_strescape will
+escape the range from 0x7f to 0xff.
+
+For example, "áéí" will become "\\303\\241\\303\\251\\303\\255". Pure
+ASCII strings are not affected by it.
+
+Add all the range 0x7f-0xff to the exception list.
+
+Origin: https://github.com/canonical/netplan/pull/486
+---
+ src/parse.c                        | 14 ++++++++++-
+ tests/ctests/test_netplan_parser.c | 51 ++++++++++++++++++++++++++++++++++++++
+ 2 files changed, 64 insertions(+), 1 deletion(-)
+
+diff --git a/src/parse.c b/src/parse.c
+index 9cb941a..927b439 100644
+--- a/src/parse.c
++++ b/src/parse.c
+@@ -65,8 +65,20 @@ NetplanParser global_parser = {0};
+  * Quotes are escaped at configuration generation time as needed, as they might be part of passwords for example.
+  * Escaping backslashes in the parser affects "netplan set" as it will always escape \'s from
+  * the input and update YAMLs with all the \'s escaped again.
++ *
++ * g_strescape will also escape all the non-ascii chars in the range 0x7f-0xff. This affects non-ascii
++ * strings and will break utf-8 strings for example. So we add the entire range to the list of exceptions.
+ */
+-static char* STRESCAPE_EXCEPTIONS = "\"\\";
++static char* STRESCAPE_EXCEPTIONS =
++    "\"\\"
++    "\x80\x81\x82\x83\x84\x85\x86\x87\x88\x89\x8a\x8b\x8c\x8d\x8e\x8f\x90\x91"
++    "\x92\x93\x94\x95\x96\x97\x98\x99\x9a\x9b\x9c\x9d\x9e\x9f\xa0\xa1\xa2\xa3"
++    "\xa4\xa5\xa6\xa7\xa8\xa9\xaa\xab\xac\xad\xae\xaf\xb0\xb1\xb2\xb3\xb4\xb5"
++    "\xb6\xb7\xb8\xb9\xba\xbb\xbc\xbd\xbe\xbf\xc0\xc1\xc2\xc3\xc4\xc5\xc6\xc7"
++    "\xc8\xc9\xca\xcb\xcc\xcd\xce\xcf\xd0\xd1\xd2\xd3\xd4\xd5\xd6\xd7\xd8\xd9"
++    "\xda\xdb\xdc\xdd\xde\xdf\xe0\xe1\xe2\xe3\xe4\xe5\xe6\xe7\xe8\xe9\xea\xeb"
++    "\xec\xed\xee\xef\xf0\xf1\xf2\xf3\xf4\xf5\xf6\xf7\xf8\xf9\xfa\xfb\xfc\xfd"
++    "\xfe\xff";
+ 
+ static gboolean
+ insert_kv_into_hash(void *key, void *value, void *hash);
+diff --git a/tests/ctests/test_netplan_parser.c b/tests/ctests/test_netplan_parser.c
+index 5b1c485..abf0544 100644
+--- a/tests/ctests/test_netplan_parser.c
++++ b/tests/ctests/test_netplan_parser.c
+@@ -2,6 +2,8 @@
+ #include <stdarg.h>
+ #include <stddef.h>
+ #include <setjmp.h>
++#include <sys/stat.h>
++#include <sys/mman.h>
+ 
+ #include <cmocka.h>
+ #include <yaml.h>
+@@ -262,6 +264,54 @@ test_nm_device_backend_is_nm_by_default(__unused void** state)
+     netplan_state_clear(&np_state);
+ }
+ 
++void
++test_parse_utf8_characters(__unused void** state)
++{
++    NetplanState *np_state = NULL;
++    int fd;
++    int size;
++    int res;
++
++    char* yaml =
++        "network:\n"
++        "  version: 2\n"
++        "  wifis:\n"
++        "    wlan0:\n"
++        "      access-points:\n"
++        "        \"áéíóúÁÉÍÓÚ\":\n"
++        "           password: \"áéíóúÁÉÍÓÚ\"\n";
++
++    char* expected =
++        "network:\n"
++        "  version: 2\n"
++        "  wifis:\n"
++        "    wlan0:\n"
++        "      access-points:\n"
++        "        \"áéíóúÁÉÍÓÚ\":\n"
++        "          auth:\n"
++        "            key-management: \"psk\"\n"
++        "            password: \"áéíóúÁÉÍÓÚ\"\n";
++
++    np_state = load_string_to_netplan_state(yaml);
++
++    fd = memfd_create("netplan-tests", 0);
++
++    netplan_state_dump_yaml(np_state, fd, NULL);
++
++    size = lseek(fd, 0, SEEK_CUR) + 1;
++    yaml = malloc(size);
++    memset(yaml, 0, size);
++    lseek(fd, 0, SEEK_SET);
++    res = read(fd, yaml, size - 1);
++    assert_true(res > 0);
++
++    assert_string_equal(yaml, expected);
++
++    netplan_state_clear(&np_state);
++    close(fd);
++    free(yaml);
++}
++
+ int
+ setup(__unused void** state)
+ {
+@@ -291,6 +341,7 @@ main()
+            cmocka_unit_test(test_netplan_parser_process_document_proper_error),
+            cmocka_unit_test(test_netplan_parser_process_document_missing_interface_error),
+            cmocka_unit_test(test_nm_device_backend_is_nm_by_default),
++           cmocka_unit_test(test_parse_utf8_characters),
+        };
+ 
+        return cmocka_run_group_tests(tests, setup, tear_down);

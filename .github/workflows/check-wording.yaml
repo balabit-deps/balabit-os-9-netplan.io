@@ -2,7 +2,7 @@ name: Check for non-inclusive language
 
 on:
   push:
-    branches: [ main, 'stable/**' ]
+    branches: [ main ]
   pull_request:
     branches: [ '**' ]
 

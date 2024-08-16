@@ -1,0 +1,111 @@
+From: Danilo Egea Gondolfo <danilogondolfo@gmail.com>
+Date: Tue, 2 Jul 2024 14:28:36 +0100
+Subject: emitter: allow unicode characters in the emitter
+
+The YAML emitter from libyaml will convert non-ascii characters to
+latin1 by default.
+
+See LP: #2071652
+
+Bug-Ubuntu: https://bugs.launchpad.net/netplan/+bug/2071652
+Origin: https://github.com/canonical/netplan/pull/485
+---
+ src/yaml-helpers.h                  |  1 +
+ tests/ctests/test_netplan_keyfile.c | 65 +++++++++++++++++++++++++++++++++++++
+ 2 files changed, 66 insertions(+)
+
+diff --git a/src/yaml-helpers.h b/src/yaml-helpers.h
+index f69a8c7..466c41b 100644
+--- a/src/yaml-helpers.h
++++ b/src/yaml-helpers.h
+@@ -88,6 +88,7 @@
+ #define YAML_OUT_START(event_ptr, emitter_ptr, file) \
+ { \
+     yaml_emitter_initialize(emitter_ptr); \
++    yaml_emitter_set_unicode(emitter_ptr, 1); \
+     yaml_emitter_set_output_file(emitter_ptr, file); \
+     yaml_stream_start_event_initialize(event_ptr, YAML_UTF8_ENCODING); \
+     if (!yaml_emitter_emit(emitter_ptr, event_ptr)) goto err_path; \
+diff --git a/tests/ctests/test_netplan_keyfile.c b/tests/ctests/test_netplan_keyfile.c
+index ae36ee5..7e88136 100644
+--- a/tests/ctests/test_netplan_keyfile.c
++++ b/tests/ctests/test_netplan_keyfile.c
+@@ -263,6 +263,70 @@ test_load_keyfile_route_options_without_route(__unused void** state)
+     netplan_state_clear(&np_state);
+ }
+ 
++void
++test_load_keyfile_utf8_password(__unused void** state)
++{
++    NetplanState *np_state = NULL;
++    int fd;
++    int size;
++    int res;
++    char* yaml;
++
++    const char* keyfile =
++        "[connection]\n"
++        "id=mywifi\n"
++        "uuid=03c8f2a7-268d-4765-b626-efcc02dd686c\n"
++        "type=wifi\n"
++        "interface-name=wlp2s0\n"
++        "[wifi]\n"
++        "mode=infrastructure\n"
++        "ssid=mywifi\n"
++        "[wifi-security]\n"
++        "key-mgmt=wpa-psk\n"
++        "psk=áÁéÉíÍóÓúÚ\n"
++        "[ipv4]\n"
++        "method=auto\n";
++
++    const char* expected =
++        "network:\n"
++        "  version: 2\n"
++        "  wifis:\n"
++        "    NM-03c8f2a7-268d-4765-b626-efcc02dd686c:\n"
++        "      renderer: NetworkManager\n"
++        "      match:\n"
++        "        name: \"wlp2s0\"\n"
++        "      dhcp4: true\n"
++        "      access-points:\n"
++        "        \"mywifi\":\n"
++        "          auth:\n"
++        "            key-management: \"psk\"\n"
++        "            password: \"áÁéÉíÍóÓúÚ\"\n"
++        "          networkmanager:\n"
++        "            uuid: \"03c8f2a7-268d-4765-b626-efcc02dd686c\"\n"
++        "            name: \"mywifi\"\n"
++        "      networkmanager:\n"
++        "        uuid: \"03c8f2a7-268d-4765-b626-efcc02dd686c\"\n"
++        "        name: \"mywifi\"\n";
++
++    np_state = load_keyfile_string_to_netplan_state(keyfile);
++
++    fd = memfd_create("netplan-tests", 0);
++
++    netplan_state_dump_yaml(np_state, fd, NULL);
++
++    size = lseek(fd, 0, SEEK_CUR) + 1;
++    yaml = malloc(size);
++    memset(yaml, 0, size);
++    lseek(fd, 0, SEEK_SET);
++    res = read(fd, yaml, size - 1);
++    assert_true(res > 0);
++
++    assert_string_equal(yaml, expected);
++
++    netplan_state_clear(&np_state);
++    close(fd);
++    free(yaml);
++}
+ 
+ int
+ setup(__unused void** state)
+@@ -288,6 +352,7 @@ main()
+         cmocka_unit_test(test_load_keyfile_vxlan),
+         cmocka_unit_test(test_load_keyfile_multiple_addresses_and_routes),
+         cmocka_unit_test(test_load_keyfile_route_options_without_route),
++        cmocka_unit_test(test_load_keyfile_utf8_password),
+     };
+ 
+     return cmocka_run_group_tests(tests, setup, tear_down);

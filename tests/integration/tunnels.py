@@ -45,6 +45,20 @@ class _CommonTests():
         self.generate_and_settle(['sit-tun0'])
         self.assert_iface('sit-tun0', ['sit-tun0@NONE', 'link.* 192.168.5.1 peer 99.99.99.99'])
 
+    def test_tunnel_sit_without_local_address(self):
+        self.addCleanup(subprocess.call, ['ip', 'link', 'delete', 'sit-tun0'], stderr=subprocess.DEVNULL)
+        with open(self.config, 'w') as f:
+            f.write('''network:
+  renderer: %(r)s
+  version: 2
+  tunnels:
+    sit-tun0:
+      mode: sit
+      remote: 99.99.99.99
+''' % {'r': self.backend})
+        self.generate_and_settle(['sit-tun0'])
+        self.assert_iface('sit-tun0', ['sit-tun0@NONE', 'link.* 0.0.0.0 peer 99.99.99.99'])
+
     def test_tunnel_ipip(self):
         self.addCleanup(subprocess.call, ['ip', 'link', 'delete', 'tun0'], stderr=subprocess.DEVNULL)
         with open(self.config, 'w') as f:
@@ -60,6 +74,21 @@ class _CommonTests():
 ''' % {'r': self.backend})
         self.generate_and_settle(['tun0'])
         self.assert_iface('tun0', ['tun0@NONE', 'link.* 192.168.5.1 peer 99.99.99.99'])
+
+    def test_tunnel_ipip_without_local_address(self):
+        self.addCleanup(subprocess.call, ['ip', 'link', 'delete', 'tun0'], stderr=subprocess.DEVNULL)
+        with open(self.config, 'w') as f:
+            f.write('''network:
+  renderer: %(r)s
+  version: 2
+  tunnels:
+    tun0:
+      mode: ipip
+      remote: 99.99.99.99
+      ttl: 64
+''' % {'r': self.backend})
+        self.generate_and_settle(['tun0'])
+        self.assert_iface('tun0', ['tun0@NONE', 'link.* 0.0.0.0 peer 99.99.99.99'])
 
     def test_tunnel_wireguard(self):
         self.addCleanup(subprocess.call, ['ip', 'link', 'delete', 'wg0'], stderr=subprocess.DEVNULL)
@@ -141,6 +170,20 @@ class _CommonTests():
 ''' % {'r': self.backend})
         self.generate_and_settle(['tun0'])
         self.assert_iface('tun0', ['tun0@NONE', 'link.* 192.168.5.1 peer 99.99.99.99'])
+
+    def test_tunnel_gre_without_local_address(self):
+        self.addCleanup(subprocess.call, ['ip', 'link', 'delete', 'tun0'], stderr=subprocess.DEVNULL)
+        with open(self.config, 'w') as f:
+            f.write('''network:
+  renderer: %(r)s
+  version: 2
+  tunnels:
+    tun0:
+      mode: gre
+      remote: 99.99.99.99
+''' % {'r': self.backend})
+        self.generate_and_settle(['tun0'])
+        self.assert_iface('tun0', ['tun0@NONE', 'link.* 0.0.0.0 peer 99.99.99.99'])
 
     def test_tunnel_gre6(self):
         self.addCleanup(subprocess.call, ['ip', 'link', 'delete', 'tun0'], stderr=subprocess.DEVNULL)
@@ -229,9 +272,13 @@ class _CommonTests():
                                   ' l3miss ', ' ttl 64 ', ' ageing 100 '])
         if self.backend == 'networkd':
             # checksums are not supported on the NetworkManager backend
-            self.assert_iface('vx0', [' udpcsum ', ' udp6zerocsumtx ',
-                                      ' udp6zerocsumrx ', ' remcsumtx ',
-                                      ' remcsumrx '])
+            json = self.iface_json('vx0')
+            data = json.get('linkinfo', {}).get('info_data', {})
+            self.assertTrue(data.get('udp_csum'))
+            self.assertTrue(data.get('udp_zero_csum6_tx'))
+            self.assertTrue(data.get('udp_zero_csum6_rx'))
+            self.assertTrue(data.get('remcsum_tx'))
+            self.assertTrue(data.get('remcsum_rx'))
 
 
 @unittest.skipIf("networkd" not in test_backends,

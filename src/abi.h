@@ -91,12 +91,13 @@ typedef enum {
     NETPLAN_TUNNEL_MODE_IPIP6       = 7,
     NETPLAN_TUNNEL_MODE_IP6GRE      = 8,
     NETPLAN_TUNNEL_MODE_VTI6        = 9,
-    NETPLAN_TUNNEL_MODE_VXLAN       = 10,
+    NETPLAN_TUNNEL_MODE_GRETAP      = 10,
+    NETPLAN_TUNNEL_MODE_IP6GRETAP   = 11,
+    /* "ip-tunnel" modes supported by Network Manager end here */
+    NETPLAN_TUNNEL_MODE_NM_MAX      = 12,
 
-    /* systemd-only, apparently? */
-    NETPLAN_TUNNEL_MODE_GRETAP      = 101,
-    NETPLAN_TUNNEL_MODE_IP6GRETAP   = 102,
-    NETPLAN_TUNNEL_MODE_WIREGUARD   = 103,
+    NETPLAN_TUNNEL_MODE_VXLAN       = 100,
+    NETPLAN_TUNNEL_MODE_WIREGUARD   = 101,
 
     NETPLAN_TUNNEL_MODE_MAX_,
 } NetplanTunnelMode;
@@ -105,7 +106,10 @@ typedef enum {
     NETPLAN_AUTH_KEY_MANAGEMENT_NONE,
     NETPLAN_AUTH_KEY_MANAGEMENT_WPA_PSK,
     NETPLAN_AUTH_KEY_MANAGEMENT_WPA_EAP,
+    NETPLAN_AUTH_KEY_MANAGEMENT_WPA_EAPSHA256,
+    NETPLAN_AUTH_KEY_MANAGEMENT_WPA_EAPSUITE_B_192,
     NETPLAN_AUTH_KEY_MANAGEMENT_8021X,
+    NETPLAN_AUTH_KEY_MANAGEMENT_WPA_SAE,
     NETPLAN_AUTH_KEY_MANAGEMENT_MAX,
 } NetplanAuthKeyManagementType;
 
@@ -114,12 +118,23 @@ typedef enum {
     NETPLAN_AUTH_EAP_TLS,
     NETPLAN_AUTH_EAP_PEAP,
     NETPLAN_AUTH_EAP_TTLS,
+    NETPLAN_AUTH_EAP_LEAP,
+    NETPLAN_AUTH_EAP_PWD,
+    NETPLAN_AUTH_EAP_UNKNOWN,
     NETPLAN_AUTH_EAP_METHOD_MAX,
 } NetplanAuthEAPMethod;
+
+typedef enum {
+    NETPLAN_AUTH_PMF_MODE_NONE,
+    NETPLAN_AUTH_PMF_MODE_DISABLED,
+    NETPLAN_AUTH_PMF_MODE_OPTIONAL,
+    NETPLAN_AUTH_PMF_MODE_REQUIRED,
+} NetplanAuthPMFMode;
 
 typedef struct authentication_settings {
     NetplanAuthKeyManagementType key_management;
     NetplanAuthEAPMethod eap_method;
+    NetplanAuthPMFMode pmf_mode;
     char* identity;
     char* anonymous_identity;
     char* password;
@@ -128,7 +143,16 @@ typedef struct authentication_settings {
     char* client_key;
     char* client_key_password;
     char* phase2_auth;  /* netplan-feature: auth-phase2 */
+    char* psk;
 } NetplanAuthenticationSettings;
+
+typedef enum {
+    NETPLAN_KEY_FLAG_NONE           = 0,
+    NETPLAN_KEY_FLAG_AGENT_OWNED    = 1<<0,
+    NETPLAN_KEY_FLAG_NOT_SAVED      = 1<<1,
+    NETPLAN_KEY_FLAG_NOT_REQUIRED   = 1<<2,
+    NETPLAN_KEY_FLAG_MAX_
+} NetplanKeyFlags;
 
 typedef struct ovs_controller {
     char* connection_mode;
@@ -250,7 +274,7 @@ struct netplan_net_definition {
     } match;
     gboolean has_match;
     gboolean wake_on_lan;
-    NetplanWifiWowlanFlag wowlan;
+    gint wowlan;
     gboolean emit_lldp;
 
     /* these properties are only valid for NETPLAN_DEF_TYPE_WIFI */
@@ -381,4 +405,10 @@ struct netplan_net_definition {
 
     /* True if "networkmanager" settings are present */
     gboolean has_backend_settings_nm;
+
+    guint tunnel_private_key_flags;
+
+    /* virtual-ethernet */
+    /* netplan-feature: virtual-ethernet */
+    NetplanNetDefinition* veth_peer_link;
 };

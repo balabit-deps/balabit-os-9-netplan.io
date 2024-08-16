@@ -1,0 +1,75 @@
+From: Tom <96974474+viciousdrop@users.noreply.github.com>
+Date: Mon, 6 Nov 2023 20:38:14 +0800
+Subject: Update ovs.py to check if ovsdb-server.service is installed before
+ throwing an error
+
+Adopted changes outlined in this bug
+Credit: https://github.com/brianfinley
+https://bugs.launchpad.net/ubuntu/+source/netplan.io/+bug/2041727
+"WARNING:root:Cannot call Open vSwitch: ovsdb-server.service is not running."
+
+Co-Authored-by: Lukas Märdian <slyon@ubuntu.com>
+
+This patch also includes a trivial change from
+https://github.com/canonical/netplan/commit/95e4d51435c2e9c9a6b7382e39c0306200ee1b9b
+
+Bug-Ubuntu: https://bugs.launchpad.net/ubuntu/+source/netplan.io/+bug/2041727
+Origin: https://github.com/canonical/netplan/pull/421
+---
+ netplan_cli/cli/commands/apply.py | 4 +++-
+ netplan_cli/cli/ovs.py            | 9 ++++++++-
+ 2 files changed, 11 insertions(+), 2 deletions(-)
+
+diff --git a/netplan_cli/cli/commands/apply.py b/netplan_cli/cli/commands/apply.py
+index 066f496..9c88a3c 100644
+--- a/netplan_cli/cli/commands/apply.py
++++ b/netplan_cli/cli/commands/apply.py
+@@ -31,7 +31,7 @@ import time
+ from .. import utils
+ from ...configmanager import ConfigManager, ConfigurationError
+ from ..sriov import apply_sriov_config
+-from ..ovs import OvsDbServerNotRunning, apply_ovs_cleanup
++from ..ovs import OvsDbServerNotRunning, OvsDbServerNotInstalled, apply_ovs_cleanup
+ 
+ 
+ OVS_CLEANUP_SERVICE = 'netplan-ovs-cleanup.service'
+@@ -433,3 +433,5 @@ class NetplanApply(utils.NetplanCommand):
+                 sys.exit(1)
+         except OvsDbServerNotRunning as e:
+             logging.warning('Cannot call Open vSwitch: {}.'.format(e))
++        except OvsDbServerNotInstalled as e:
++            logging.debug('Cannot call Open vSwitch: %s.', e)
+diff --git a/netplan_cli/cli/ovs.py b/netplan_cli/cli/ovs.py
+index 0ba0482..0caab72 100644
+--- a/netplan_cli/cli/ovs.py
++++ b/netplan_cli/cli/ovs.py
+@@ -20,7 +20,7 @@ import os
+ import subprocess
+ import re
+ 
+-from .utils import systemctl_is_active
++from .utils import systemctl_is_active, systemctl_is_installed
+ 
+ OPENVSWITCH_OVS_VSCTL = '/usr/bin/ovs-vsctl'
+ OPENVSWITCH_OVSDB_SERVER_UNIT = 'ovsdb-server.service'
+@@ -43,6 +43,10 @@ class OvsDbServerNotRunning(Exception):
+     pass
+ 
+ 
++class OvsDbServerNotInstalled(Exception):
++    pass
++
++
+ def _del_col(type, iface, column, value):
+     """Cleanup values from a column (i.e. "column=value")"""
+     default = DEFAULTS.get(column)
+@@ -125,6 +129,9 @@ def apply_ovs_cleanup(config_manager, ovs_old, ovs_current):  # pragma: nocover
+     Also filter for individual settings tagged netplan/<column>[/<key]=value
+     in external-ids and clear them if they have been set by netplan.
+     """
++    if not systemctl_is_installed(OPENVSWITCH_OVSDB_SERVER_UNIT):
++        raise OvsDbServerNotInstalled("Cannot apply OVS cleanup: %s is 'not-found'" %
++                                      OPENVSWITCH_OVSDB_SERVER_UNIT)
+     if not systemctl_is_active(OPENVSWITCH_OVSDB_SERVER_UNIT):
+         raise OvsDbServerNotRunning('{} is not running'.format(OPENVSWITCH_OVSDB_SERVER_UNIT))
+ 

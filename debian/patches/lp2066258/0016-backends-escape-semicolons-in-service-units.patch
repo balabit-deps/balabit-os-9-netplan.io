@@ -1,0 +1,292 @@
+From: Danilo Egea Gondolfo <danilogondolfo@gmail.com>
+Date: Fri, 24 May 2024 14:11:12 +0100
+Subject: backends: escape semicolons in service units
+
+Semicolons separated from other words by a combination of spaces and/or
+tabs will be escaped.
+---
+ src/networkd.c                   |  7 +++++
+ src/openvswitch.c                |  3 +++
+ src/sriov.c                      |  3 +++
+ src/util-internal.h              |  3 +++
+ src/util.c                       | 34 +++++++++++++++++++++++
+ tests/ctests/test_netplan_misc.c | 45 +++++++++++++++++++++++++++++++
+ tests/generator/test_ovs.py      | 58 ++++++++++++++++++++++++++++++++++++++++
+ tests/test_sriov.py              | 29 ++++++++++++++++++++
+ 8 files changed, 182 insertions(+)
+
+diff --git a/src/networkd.c b/src/networkd.c
+index e66ab4c..f9fefe9 100644
+--- a/src/networkd.c
++++ b/src/networkd.c
+@@ -301,6 +301,9 @@ write_regdom(const NetplanNetDefinition* def, const char* rootdir, GError** erro
+     g_string_append(s, "\n[Service]\nType=oneshot\n");
+     g_string_append_printf(s, "ExecStart="SBINDIR"/iw reg set %s\n", def->regulatory_domain);
+ 
++    g_autofree char* new_s = _netplan_scrub_systemd_unit_contents(s->str);
++    g_string_free(s, TRUE);
++    s = g_string_new(new_s);
+     _netplan_g_string_free_to_file_with_permissions(s, rootdir, path, NULL, "root", "root", 0640);
+     safe_mkdir_p_dir(link);
+     if (symlink(path, link) < 0 && errno != EEXIST) {
+@@ -1191,6 +1194,10 @@ write_wpa_unit(const NetplanNetDefinition* def, const char* rootdir)
+     } else {
+         g_string_append(s, " -Dnl80211,wext\n");
+     }
++
++    g_autofree char* new_s = _netplan_scrub_systemd_unit_contents(s->str);
++    g_string_free(s, TRUE);
++    s = g_string_new(new_s);
+     _netplan_g_string_free_to_file_with_permissions(s, rootdir, path, NULL, "root", "root", 0640);
+ }
+ 
+diff --git a/src/openvswitch.c b/src/openvswitch.c
+index b33769d..7d31e7f 100644
+--- a/src/openvswitch.c
++++ b/src/openvswitch.c
+@@ -62,6 +62,9 @@ write_ovs_systemd_unit(const char* id, const GString* cmds, const char* rootdir,
+     g_string_append(s, "\n[Service]\nType=oneshot\nTimeoutStartSec=10s\n");
+     g_string_append(s, cmds->str);
+ 
++    g_autofree char* new_s = _netplan_scrub_systemd_unit_contents(s->str);
++    g_string_free(s, TRUE);
++    s = g_string_new(new_s);
+     _netplan_g_string_free_to_file_with_permissions(s, rootdir, path, NULL, "root", "root", 0640);
+ 
+     safe_mkdir_p_dir(link);
+diff --git a/src/sriov.c b/src/sriov.c
+index c3cd80d..710f1a8 100644
+--- a/src/sriov.c
++++ b/src/sriov.c
+@@ -53,6 +53,9 @@ write_sriov_rebind_systemd_unit(GHashTable* pfs, const char* rootdir, GError** e
+     g_string_truncate(interfaces, interfaces->len-1); /* cut trailing whitespace */
+     g_string_append_printf(s, "ExecStart=" SBINDIR "/netplan rebind %s\n", interfaces->str);
+ 
++    g_autofree char* new_s = _netplan_scrub_systemd_unit_contents(s->str);
++    g_string_free(s, TRUE);
++    s = g_string_new(new_s);
+     _netplan_g_string_free_to_file_with_permissions(s, rootdir, path, NULL, "root", "root", 0640);
+     g_string_free(interfaces, TRUE);
+ 
+diff --git a/src/util-internal.h b/src/util-internal.h
+index f6f36fc..e9c2d13 100644
+--- a/src/util-internal.h
++++ b/src/util-internal.h
+@@ -185,3 +185,6 @@ _netplan_netdef_pertype_iter_free(struct netdef_pertype_iter* it);
+ 
+ gchar*
+ _netplan_scrub_string(const char* content);
++
++gchar*
++_netplan_scrub_systemd_unit_contents(const char* content);
+diff --git a/src/util.c b/src/util.c
+index a3dae98..30d05cb 100644
+--- a/src/util.c
++++ b/src/util.c
+@@ -1235,3 +1235,37 @@ _netplan_scrub_string(const char* content)
+ 
+     return g_string_free(s, FALSE);
+ }
++
++static gboolean
++_is_space_or_tab(char c)
++{
++    return c == ' ' || c == '\t';
++}
++
++char*
++_netplan_scrub_systemd_unit_contents(const char* content)
++{
++    size_t content_len = strlen(content);
++    // Assume a few replacements will happen to reduce reallocation
++    GString* s = g_string_sized_new(content_len + 8);
++
++    // Append the first character of "content" to the result string
++    g_string_append_len(s, content, 1);
++
++    // Walk from the second element to the one before the last looking for isolated semicolons
++    // A semicolon is isolated if it's surrounded by either tabs or spaces
++    const char* p = content + 1;
++    while (p < (content + content_len - 1)) {
++        if (*p == ';' && _is_space_or_tab(*(p - 1)) && _is_space_or_tab(*(p + 1))) {
++            g_string_append_len(s, "\\;", 2);
++        } else {
++            g_string_append_len(s, p, 1);
++        }
++        p++;
++    }
++
++    // Append the last character of "content" to the result string
++    g_string_append_len(s, p, 1);
++
++    return g_string_free(s, FALSE);
++}
+diff --git a/tests/ctests/test_netplan_misc.c b/tests/ctests/test_netplan_misc.c
+index 35bf4f8..aa14a71 100644
+--- a/tests/ctests/test_netplan_misc.c
++++ b/tests/ctests/test_netplan_misc.c
+@@ -348,6 +348,50 @@ test_normalize_ip_address(__unused void** state)
+     assert_string_equal(normalize_ip_address("0.0.0.0/0", AF_INET), "0.0.0.0/0");
+ }
+ 
++void
++test_scrub_systemd_unit_content(__unused void** state)
++{
++    char* str = ";abc;";
++    char* res = _netplan_scrub_systemd_unit_contents(str);
++    assert_string_equal(res, ";abc;");
++    g_free(res);
++
++    str = ";;;;";
++    res = _netplan_scrub_systemd_unit_contents(str);
++    assert_string_equal(res, ";;;;");
++    g_free(res);
++
++    str = " ;;;; ";
++    res = _netplan_scrub_systemd_unit_contents(str);
++    assert_string_equal(res, " ;;;; ");
++    g_free(res);
++
++    str = "; ; ; ; ;";
++    res = _netplan_scrub_systemd_unit_contents(str);
++    assert_string_equal(res, "; \\; \\; \\; ;");
++    g_free(res);
++
++    str = " ; ; ; ; ; ";
++    res = _netplan_scrub_systemd_unit_contents(str);
++    assert_string_equal(res, " \\; \\; \\; \\; \\; ");
++    g_free(res);
++
++    str = "a ; ; ; ; ; b";
++    res = _netplan_scrub_systemd_unit_contents(str);
++    assert_string_equal(res, "a \\; \\; \\; \\; \\; b");
++    g_free(res);
++
++    str = "\t;\t; ;\t; \t ;\t ";
++    res = _netplan_scrub_systemd_unit_contents(str);
++    assert_string_equal(res, "\t\\;\t\\; \\;\t\\; \t \\;\t ");
++    g_free(res);
++
++    str = "\t;\t;\t;\t;\t;\t";
++    res = _netplan_scrub_systemd_unit_contents(str);
++    assert_string_equal(res, "\t\\;\t\\;\t\\;\t\\;\t\\;\t");
++    g_free(res);
++}
++
+ int
+ setup(__unused void** state)
+ {
+@@ -380,6 +424,7 @@ main()
+            cmocka_unit_test(test_util_is_route_rule_present),
+            cmocka_unit_test(test_util_is_string_in_array),
+            cmocka_unit_test(test_normalize_ip_address),
++           cmocka_unit_test(test_scrub_systemd_unit_content),
+        };
+ 
+        return cmocka_run_group_tests(tests, setup, tear_down);
+diff --git a/tests/generator/test_ovs.py b/tests/generator/test_ovs.py
+index 0d27ff9..17c33ed 100644
+--- a/tests/generator/test_ovs.py
++++ b/tests/generator/test_ovs.py
+@@ -1119,3 +1119,61 @@ ExecStart=/usr/bin/ovs-vsctl --may-exist add-br abc/../../123.100 abc/../../123
+ ExecStart=/usr/bin/ovs-vsctl set Interface abc/../../123.100 external-ids:netplan=true
+ '''},
+                          'cleanup.service': OVS_CLEANUP % {'iface': 'cleanup'}})
++
++    def test_control_characters_and_semicolons_escaping(self):
++        self.generate('''network:
++  version: 2
++  bridges: # bridges first, to trigger multi-pass processing
++    ovs0:
++      interfaces: [eth0, eth1]
++      openvswitch: {}
++  ethernets:
++    eth0:
++      openvswitch:
++        external-ids:
++          "a\\n1\\ra": " ; a ; 1 ;a; ;b\\t;\\t3 ;\\ta\\t; 1"
++        other-config:
++          "a\\n1\\ra": " ; a ; 1 ;a; ;b\\t;\\t3 ;\\ta\\t; 1"
++      dhcp6: true
++    eth1:
++      dhcp4: true
++      openvswitch:
++        other-config:
++          disable-in-band: false\n''', skip_generated_yaml_validation=True)
++        self.assert_ovs({'ovs0.service': OVS_VIRTUAL % {'iface': 'ovs0', 'extra': '''
++[Service]
++Type=oneshot
++TimeoutStartSec=10s
++ExecStart=/usr/bin/ovs-vsctl --may-exist add-br ovs0
++ExecStart=/usr/bin/ovs-vsctl --may-exist add-port ovs0 eth1
++ExecStart=/usr/bin/ovs-vsctl --may-exist add-port ovs0 eth0
++''' + OVS_BR_DEFAULT % {'iface': 'ovs0'}},
++                         'eth0.service': OVS_PHYSICAL % {'iface': 'eth0', 'extra': '''\
++Requires=netplan-ovs-ovs0.service
++After=netplan-ovs-ovs0.service
++
++[Service]
++Type=oneshot
++TimeoutStartSec=10s
++ExecStart=/usr/bin/ovs-vsctl set Interface eth0 external-ids:a\\n1\\ra= \\; a \\; 1 ;a; ;b\\t;\\t3 ;\\ta\\t; 1
++ExecStart=/usr/bin/ovs-vsctl set Interface eth0 external-ids:netplan/external-ids/a\\n1\\ra=,;,a,;,1,;a;,;b\\t;\\t3,;\\ta\\t;,1
++ExecStart=/usr/bin/ovs-vsctl set Interface eth0 other-config:a\\n1\\ra= \\; a \\; 1 ;a; ;b\\t;\\t3 ;\\ta\\t; 1
++ExecStart=/usr/bin/ovs-vsctl set Interface eth0 external-ids:netplan/other-config/a\\n1\\ra=,;,a,;,1,;a;,;b\\t;\\t3,;\\ta\\t;,1
++'''},
++                         'eth1.service': OVS_PHYSICAL % {'iface': 'eth1', 'extra': '''\
++Requires=netplan-ovs-ovs0.service
++After=netplan-ovs-ovs0.service
++
++[Service]
++Type=oneshot
++TimeoutStartSec=10s
++ExecStart=/usr/bin/ovs-vsctl set Interface eth1 other-config:disable-in-band=false
++ExecStart=/usr/bin/ovs-vsctl set Interface eth1 external-ids:netplan/other-config/disable-in-band=false
++'''},
++                         'cleanup.service': OVS_CLEANUP % {'iface': 'cleanup'}})
++        # Confirm that the networkd config is still sane
++        self.assert_networkd({'ovs0.network': ND_EMPTY % ('ovs0', 'ipv6'),
++                              'eth0.network': (ND_DHCP6 % 'eth0')
++                              .replace('LinkLocalAddressing=ipv6', 'LinkLocalAddressing=no\nBridge=ovs0'),
++                              'eth1.network': (ND_DHCP4 % 'eth1')
++                              .replace('LinkLocalAddressing=ipv6', 'LinkLocalAddressing=no\nBridge=ovs0')})
+diff --git a/tests/test_sriov.py b/tests/test_sriov.py
+index 3c06e43..054500c 100644
+--- a/tests/test_sriov.py
++++ b/tests/test_sriov.py
+@@ -913,6 +913,35 @@ After=sys-subsystem-net-devices-engreen.device
+ [Service]
+ Type=oneshot
+ ExecStart=/usr/sbin/netplan rebind enblue engreen
++'''})
++
++    def test_escaping_semicolons_from_unit_file(self):
++        ''' Check if semicolons and line breaks are properly escaped in the generated
++        systemd service unit.
++        '''
++        self.generate('''network:
++  version: 2
++  ethernets:
++    engreen:
++      embedded-switch-mode: switchdev
++      delay-virtual-functions-rebind: true
++    enblue:
++      match: {driver: dummy_driver}
++      set-name: ";en ; a\\t;\\tb ;\\tc\\t; d; \\n;\\nabc"
++      embedded-switch-mode: legacy
++      delay-virtual-functions-rebind: true
++      virtual-function-count: 4
++    sriov_vf0:
++      link: engreen''', skip_generated_yaml_validation=True)
++        self.assert_sriov({'rebind.service': '''[Unit]
++Description=(Re-)bind SR-IOV Virtual Functions to their driver
++After=network.target
++After=sys-subsystem-net-devices-;en \\; a\\t;\\tb ;\\tc\\t; d; \\n;\\nabc.device
++After=sys-subsystem-net-devices-engreen.device
++
++[Service]
++Type=oneshot
++ExecStart=/usr/sbin/netplan rebind ;en \\; a\\t;\\tb ;\\tc\\t; d; \\n;\\nabc engreen
+ '''})
+ 
+     def test_rebind_not_delayed(self):

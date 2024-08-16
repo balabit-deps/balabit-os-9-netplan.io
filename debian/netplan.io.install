@@ -1,5 +1,6 @@
-lib/netplan/*
-lib/systemd/system-generators/netplan
-usr/libexec/netplan/*
-usr/share/*
+usr/share/netplan/*
+usr/share/man/man8/*
+usr/share/bash-completion/*
 usr/sbin/netplan
+usr/libexec/netplan/netplan-dbus
+usr/share/dbus-1/*

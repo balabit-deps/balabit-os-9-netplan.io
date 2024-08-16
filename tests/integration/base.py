@@ -31,6 +31,7 @@ import unittest
 import shutil
 import gi
 import glob
+import json
 
 # make sure we point to libnetplan properly.
 os.environ.update({'LD_LIBRARY_PATH': '.:{}'.format(os.environ.get('LD_LIBRARY_PATH'))})
@@ -76,6 +77,9 @@ class IntegrationTestsBase(unittest.TestCase):
             f.write('[keyfile]\nunmanaged-devices=interface-name:en*,eth0,nptestsrv')
         subprocess.check_call(['netplan', 'apply'])
         subprocess.call(['/lib/systemd/systemd-networkd-wait-online', '--quiet', '--timeout=30'])
+        if klass.is_active('NetworkManager.service'):
+            subprocess.check_call(['nm-online', '-s'])
+            subprocess.check_call(['nmcli', 'general', 'reload'])
 
     @classmethod
     def tearDownClass(klass):
@@ -115,19 +119,29 @@ class IntegrationTestsBase(unittest.TestCase):
         if os.path.exists('/sys/class/net/eth42'):
             raise SystemError('eth42 interface already exists')
 
-        # create virtual ethernet devs
-        subprocess.check_call(['ip', 'link', 'add', 'name', 'eth42', 'type',
-                               'veth', 'peer', 'name', 'veth42'])
         klass.dev_e_ap = 'veth42'
         klass.dev_e_client = 'eth42'
         klass.dev_e_ap_ip4 = '192.168.5.1/24'
         klass.dev_e_ap_ip6 = '2600::1/64'
-        subprocess.check_call(['ip', 'link', 'add', 'name', 'eth43', 'type',
-                               'veth', 'peer', 'name', 'veth43'])
+
         klass.dev_e2_ap = 'veth43'
         klass.dev_e2_client = 'eth43'
         klass.dev_e2_ap_ip4 = '192.168.6.1/24'
         klass.dev_e2_ap_ip6 = '2601::1/64'
+
+        # don't let NM trample over our test routers
+        with open('/etc/NetworkManager/conf.d/99-test-denylist.conf', 'w') as f:
+            f.write('[keyfile]\nunmanaged-devices+=%s,%s\n' % (klass.dev_e_ap, klass.dev_e2_ap))
+        if klass.is_active('NetworkManager.service'):
+            subprocess.check_call(['nm-online', '-s'])
+            subprocess.check_call(['nmcli', 'general', 'reload'])
+
+        # create virtual ethernet devs
+        subprocess.check_call(['ip', 'link', 'add', 'name', 'eth42', 'type',
+                               'veth', 'peer', 'name', 'veth42'])
+        subprocess.check_call(['ip', 'link', 'add', 'name', 'eth43', 'type',
+                               'veth', 'peer', 'name', 'veth43'])
+
         # Creation of the veths introduces a race with newer versions of
         # systemd, as it  will change the initial MAC address after the device
         # was created and networkd took control. Give it some time, so we read
@@ -139,10 +153,6 @@ class IntegrationTestsBase(unittest.TestCase):
         out = subprocess.check_output(['ip', '-br', 'link', 'show', 'dev', 'eth43'],
                                       text=True)
         klass.dev_e2_client_mac = out.split()[2]
-
-        # don't let NM trample over our test routers
-        with open('/etc/NetworkManager/conf.d/99-test-denylist.conf', 'w') as f:
-            f.write('[keyfile]\nunmanaged-devices+=%s,%s\n' % (klass.dev_e_ap, klass.dev_e2_ap))
 
     @classmethod
     def shutdown_devices(klass):
@@ -269,6 +279,15 @@ class IntegrationTestsBase(unittest.TestCase):
         else:
             self.poll_text(dnsmasq_log, 'DHCP, IP range')
 
+    def iface_json(self, iface: str) -> dict:
+        '''Return iproute2's (detailed) JSON representation'''
+        out = subprocess.check_output(['ip', '-j', '-d', 'a', 'show', 'dev', iface],
+                                      text=True)
+        json_dict = json.loads(out)
+        if json_dict:
+            return json_dict[0]
+        return {}
+
     def assert_iface(self, iface, expected_ip_a=None, unexpected_ip_a=None):
         '''Assert that client interface has been created'''
 
@@ -322,7 +341,10 @@ class IntegrationTestsBase(unittest.TestCase):
         if 'Run \'systemctl daemon-reload\' to reload units.' in out:
             self.fail('systemd units changed without reload')
         # start NM so that we can verify that it does not manage anything
-        subprocess.check_call(['systemctl', 'start', 'NetworkManager.service'])
+        subprocess.call(['nm-online', '-sxq'])  # Wait for NM startup, from 'netplan apply'
+        if not self.is_active('NetworkManager.service'):
+            subprocess.check_call(['systemctl', 'start', 'NetworkManager.service'])
+            subprocess.call(['nm-online', '-sq'])
 
         # Debugging output
         # out = subprocess.check_output(['NetworkManager', '--print-config'], text=True)

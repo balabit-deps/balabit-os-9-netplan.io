@@ -135,7 +135,11 @@ write_auth(yaml_event_t* event, yaml_emitter_t* emitter, NetplanAuthenticationSe
     YAML_NONNULL_STRING(event, emitter, "client-key", auth.client_key);
     YAML_NONNULL_STRING(event, emitter, "client-key-password", auth.client_key_password);
     YAML_NONNULL_STRING(event, emitter, "phase2-auth", auth.phase2_auth);
-    YAML_NONNULL_STRING(event, emitter, "password", auth.password);
+    if (!auth.password && auth.psk) {
+        YAML_NONNULL_STRING(event, emitter, "password", auth.psk);
+    } else {
+        YAML_NONNULL_STRING(event, emitter, "password", auth.password);
+    }
     YAML_MAPPING_CLOSE(event, emitter);
     return TRUE;
 err_path: return FALSE; // LCOV_EXCL_LINE
@@ -351,6 +355,7 @@ write_backend_settings(yaml_event_t* event, yaml_emitter_t* emitter, NetplanBack
         YAML_MAPPING_OPEN(event, emitter);
         YAML_NONNULL_STRING(event, emitter, "uuid", s.uuid);
         YAML_NONNULL_STRING(event, emitter, "name", s.name);
+
         if (s.passthrough) {
             YAML_SCALAR_PLAIN(event, emitter, "passthrough");
             YAML_MAPPING_OPEN(event, emitter);
@@ -388,6 +393,8 @@ write_access_points(yaml_event_t* event, yaml_emitter_t* emitter, const NetplanN
         }
 
         YAML_UINT_0(def, event, emitter, "channel", ap->channel);
+        if (ap->auth.psk && !_is_auth_key_management_psk(&ap->auth))
+            YAML_NONNULL_STRING(event, emitter, "password", ap->auth.psk);
         if (ap->has_auth || DIRTY(def, ap->auth))
             write_auth(event, emitter, ap->auth);
         if (ap->mode != NETPLAN_WIFI_MODE_INFRASTRUCTURE || DIRTY(def, ap->mode))
@@ -506,9 +513,10 @@ write_tunnel_settings(yaml_event_t* event, yaml_emitter_t* emitter, const Netpla
     /* VXLAN settings */
     write_vxlan(event, emitter, def);
 
-    if (def->tunnel.input_key || def->tunnel.output_key || def->tunnel.private_key) {
+    if (def->tunnel.input_key || def->tunnel.output_key || def->tunnel.private_key || def->tunnel_private_key_flags) {
         if (   g_strcmp0(def->tunnel.input_key, def->tunnel.output_key) == 0
-            && g_strcmp0(def->tunnel.input_key, def->tunnel.private_key) == 0) {
+            && g_strcmp0(def->tunnel.input_key, def->tunnel.private_key) == 0
+            && def->tunnel_private_key_flags == 0) {
             /* use short form if all keys are the same */
             YAML_STRING(def, event, emitter, "key", def->tunnel.input_key);
         } else {
@@ -517,6 +525,17 @@ write_tunnel_settings(yaml_event_t* event, yaml_emitter_t* emitter, const Netpla
             YAML_STRING(def, event, emitter, "input", def->tunnel.input_key);
             YAML_STRING(def, event, emitter, "output", def->tunnel.output_key);
             YAML_STRING(def, event, emitter, "private", def->tunnel.private_key);
+            if (def->tunnel_private_key_flags > 0) {
+                YAML_SCALAR_PLAIN(event, emitter, "private-key-flags");
+                YAML_SEQUENCE_OPEN(event, emitter);
+
+                for(int i = 1; i < NETPLAN_KEY_FLAG_MAX_; i <<= 1) {
+                    if (def->tunnel_private_key_flags & i)
+                        YAML_SCALAR_PLAIN(event, emitter, netplan_key_flags_name(i));
+                }
+
+                YAML_SEQUENCE_CLOSE(event, emitter);
+            }
             YAML_MAPPING_CLOSE(event, emitter);
         }
     }
@@ -778,6 +797,9 @@ _serialize_yaml(
     YAML_BOOL_TRUE(def, event, emitter, "delay-virtual-functions-rebind",
                    def->sriov_delay_virtual_functions_rebind);
 
+    if (def->type == NETPLAN_DEF_TYPE_VETH && def->veth_peer_link)
+        YAML_STRING(def, event, emitter, "peer", def->veth_peer_link->id);
+
     /* Search interfaces */
     if (def->type == NETPLAN_DEF_TYPE_BRIDGE || def->type == NETPLAN_DEF_TYPE_BOND || def->type == NETPLAN_DEF_TYPE_VRF) {
         tmp_arr = g_array_new(FALSE, FALSE, sizeof(NetplanNetDefinition*));
@@ -978,7 +1000,7 @@ netplan_netdef_write_yaml(
 
     // LCOV_EXCL_START
 err_path:
-    g_set_error(error, G_MARKUP_ERROR, G_MARKUP_ERROR_INVALID_CONTENT, "Error generating YAML: %s", emitter->problem);
+    g_set_error(error, NETPLAN_EMITTER_ERROR, NETPLAN_ERROR_YAML_EMITTER, "Error generating YAML: %s", emitter->problem);
     yaml_emitter_delete(emitter);
     fclose(output);
     return FALSE;
@@ -1042,6 +1064,7 @@ netplan_netdef_list_write_yaml(const NetplanState* np_state, GList* netdefs, int
 
     /* Go through the netdefs type-by-type */
     for (unsigned i = 0; i < NETPLAN_DEF_TYPE_MAX_; ++i) {
+        if (i == NETPLAN_DEF_TYPE_NM_PLACEHOLDER_) continue;
         /* Per-netdef config */
         if (g_list_find_custom(netdefs, &i, contains_netdef_type)) {
             if (i == NETPLAN_DEF_TYPE_PORT) {
@@ -1085,14 +1108,14 @@ skip_netdefs:
 
     // LCOV_EXCL_START
 err_path:
-    g_set_error(error, G_MARKUP_ERROR, G_MARKUP_ERROR_INVALID_CONTENT, "Error generating YAML: %s", emitter->problem);
+    g_set_error(error, NETPLAN_EMITTER_ERROR, NETPLAN_ERROR_YAML_EMITTER, "Error generating YAML: %s", emitter->problem);
     yaml_emitter_delete(emitter);
     fclose(out_stream);
     return FALSE;
     // LCOV_EXCL_STOP
 
 file_error:
-    g_set_error(error, G_FILE_ERROR, errno, "%s", strerror(errno));
+    g_set_error(error, NETPLAN_FILE_ERROR, errno, "%m");
     return FALSE;
 }
 
@@ -1129,16 +1152,24 @@ netplan_state_write_yaml_file(const NetplanState* np_state, const char* filename
     gboolean write_globals = !!np_state->global_renderer;
     if (to_write == NULL && !write_globals) {
         if (unlink(path) && errno != ENOENT) {
-            g_set_error(error, G_FILE_ERROR, errno, "%s", strerror(errno));
+            g_set_error(error, NETPLAN_FILE_ERROR, errno, "%m");
             return FALSE;
         }
         return TRUE;
     }
 
     tmp_path = g_strdup_printf("%s.XXXXXX", path);
+    /*
+     * glibc will create a file with mode 600 by default.
+     * Although, mkstemp manpage says that the POSIX spec doesn't say anything
+     * about file modes and the application should make sure umask is set
+     * appropriately before calling mkstemp().
+     */
+    mode_t old_umask = umask(077);
     out_fd = mkstemp(tmp_path); // permissions 0600 by default
+    umask(old_umask);
     if (out_fd < 0) {
-        g_set_error(error, G_FILE_ERROR, errno, "%s", strerror(errno));
+        g_set_error(error, NETPLAN_FILE_ERROR, errno, "%m");
         return FALSE;
     }
 
@@ -1148,7 +1179,7 @@ netplan_state_write_yaml_file(const NetplanState* np_state, const char* filename
     if (ret) {
         if (rename(tmp_path, path) == 0)
             return TRUE;
-        g_set_error(error, G_FILE_ERROR, errno, "%s", strerror(errno));
+        g_set_error(error, NETPLAN_FILE_ERROR, errno, "%m");
     }
     /* Something went wrong, clean up the tempfile! */
     unlink(tmp_path);
@@ -1197,8 +1228,10 @@ netplan_state_update_yaml_hierarchy(const NetplanState* np_state, const char* de
 
     /* Dump global conf to the default path */
     if (!np_state->netdefs || g_hash_table_size(np_state->netdefs) == 0) {
-        if ((np_state->backend != NETPLAN_BACKEND_NONE)
-                || has_openvswitch(&np_state->ovs_settings, NETPLAN_BACKEND_NONE, NULL)) {
+        if (   has_openvswitch(&np_state->ovs_settings, NETPLAN_BACKEND_NONE, NULL)
+            || (np_state->backend != NETPLAN_BACKEND_NONE && np_state->global_renderer &&
+                (   g_hash_table_contains(np_state->global_renderer, default_path) // 70-netplan-set.yaml already exsits and defines a global renderer
+                 || g_hash_table_contains(np_state->global_renderer, "")))) { // 70-netplan-set.yaml doesn't exist, but we need to create it to define a global renderer
             g_hash_table_insert(perfile_netdefs, default_path, NULL);
         }
     } else {
@@ -1213,6 +1246,22 @@ netplan_state_update_yaml_hierarchy(const NetplanState* np_state, const char* de
         }
     }
 
+    /* Add files containing a global renderer value to "perfile_netdefs", so
+     * they are updated on disk. */
+    if (np_state->global_renderer && g_hash_table_size(np_state->global_renderer) > 0) {
+        g_hash_table_iter_init(&hash_iter, np_state->global_renderer);
+        while (g_hash_table_iter_next (&hash_iter, &key, &value)) {
+            char *filename = key;
+            /* Anonymous globals will go to the default YAML (see above) */
+            if (g_strcmp0(filename, "") == 0)
+                continue;
+            /* Ignore the update of this file if it's already going to be
+             * written, caused by updated netdefs. */
+            if (!g_hash_table_contains(perfile_netdefs, filename))
+                g_hash_table_insert(perfile_netdefs, filename, NULL);
+        }
+    }
+
     g_hash_table_iter_init(&hash_iter, perfile_netdefs);
     while (g_hash_table_iter_next (&hash_iter, &key, &value)) {
         const char *filename = key;
@@ -1224,6 +1273,7 @@ netplan_state_update_yaml_hierarchy(const NetplanState* np_state, const char* de
         if (!netplan_netdef_list_write_yaml(np_state, netdefs, out_fd, filename, is_fallback, error))
             goto cleanup; // LCOV_EXCL_LINE
         close(out_fd);
+        out_fd = -1;
     }
 
     /* Remove any referenced source file that doesn't have any associated data.
@@ -1242,11 +1292,11 @@ netplan_state_update_yaml_hierarchy(const NetplanState* np_state, const char* de
     goto cleanup;
 
 file_error:
-    g_set_error(error, G_FILE_ERROR, errno, "%s", strerror(errno));
+    g_set_error(error, NETPLAN_FILE_ERROR, errno, "%m");
     ret = FALSE;
 cleanup:
     if (out_fd >= 0)
-        close(out_fd);
+        close(out_fd); // LCOV_EXCL_LINE
     g_hash_table_destroy(perfile_netdefs);
     return ret;
 }

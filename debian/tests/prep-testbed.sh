@@ -5,6 +5,9 @@ if [ "$(systemctl is-active NetworkManager.service)" = active ]; then
     systemctl stop NetworkManager.service
 fi
 
+# Make sure the system is ready before starting our tests
+systemctl daemon-reload
+
 # only relevant on Debian
 dpkg-vendor --is Debian || exit 0
 

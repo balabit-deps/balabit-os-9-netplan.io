@@ -1,0 +1,26 @@
+From: Danilo Egea Gondolfo <danilogondolfo@gmail.com>
+Date: Tue, 23 Jan 2024 13:39:45 +0000
+Subject: tests: assert generated .service files in assert_sriov
+
+We are not checking if the systemd units generated are correct.
+
+Origin: https://github.com/canonical/netplan/pull/437
+---
+ tests/generator/base.py | 7 +++++++
+ 1 file changed, 7 insertions(+)
+
+diff --git a/tests/generator/base.py b/tests/generator/base.py
+index b7bf4f9..7795d40 100644
+--- a/tests/generator/base.py
++++ b/tests/generator/base.py
+@@ -491,3 +491,10 @@ class TestBase(unittest.TestCase):
+         self.assertEqual(set(os.path.basename(file) for file in sriov_systemd_dir),
+                          {'netplan-sriov-' + f for f in file_contents_map})
+         self.assertEqual(set(os.listdir(self.workdir.name)) - {'lib'}, {'etc', 'run'})
++
++        for file in sriov_systemd_dir:
++            basename = os.path.basename(file)
++            with open(file, 'r') as f:
++                contents = f.read()
++                map_contents = file_contents_map.get(basename.replace('netplan-sriov-', ''))
++                self.assertEqual(map_contents, contents)

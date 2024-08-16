@@ -99,6 +99,26 @@ typedef struct {
     char* label;
 } NetplanAddressOptions;
 
+struct address_iter {
+    guint ip4_index;
+    guint ip6_index;
+    guint address_options_index;
+    NetplanNetDefinition* netdef;
+    NetplanAddressOptions* last_address;
+};
+
+struct nameserver_iter {
+    guint ip4_index;
+    guint ip6_index;
+    guint search_index;
+    NetplanNetDefinition* netdef;
+};
+
+struct route_iter {
+    guint route_index;
+    NetplanNetDefinition* netdef;
+};
+
 typedef struct {
     NetplanWifiMode mode;
     char* ssid;
@@ -114,7 +134,7 @@ typedef struct {
 } NetplanWifiAccessPoint;
 
 typedef struct {
-    guint family;
+    gint family;
     char* type;
     char* scope;
     guint table;
@@ -135,7 +155,7 @@ typedef struct {
 } NetplanIPRoute;
 
 typedef struct {
-    guint family;
+    gint family;
 
     char* from;
     char* to;
@@ -290,3 +310,9 @@ netplan_state_has_nondefault_globals(const NetplanState* np_state);
 
 void
 clear_netdef_from_list(void* def);
+
+void
+free_address_options(void* ptr);
+
+void
+free_access_point(void* key, void* value, void* data);

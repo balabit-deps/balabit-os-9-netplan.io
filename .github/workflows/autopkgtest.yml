@@ -4,7 +4,7 @@ name: Autopkgtest CI
 # events but only for the main branch
 on:
   push:
-    branches: [ main, 'stable/**' ]
+    branches: [ main ]
   pull_request:
     branches: [ '**' ]
 
@@ -42,9 +42,13 @@ jobs:
           pull-lp-source netplan.io
           cp -r netplan.io-*/debian .
           rm -r debian/patches/  # clear any distro patches
-          dch -v $(git describe --tags) "Autopkgtest CI testing (Jammy)"
+          echo "usr/lib/python3/dist-packages/netplan/*" >> debian/netplan.io.install  # bindings
+          TAG=$(git describe --tags $(git rev-list --tags --max-count=1))  # find latest (stable) tag
+          REV=$(git rev-parse --short HEAD)  # get current git revision
+          VER="$TAG+git~$REV"
+          dch -v "$VER" "Autopkgtest CI testing (Jammy)"
       - name: Run autopkgtest (incl. build)
         run: |
           # using --setup-commands temporarily to install:
           # cmocka/pytest/rich/ethtool until they become proper test-deps
-          autopkgtest . --setup-commands='apt -y install ethtool python3-rich python3-pytest python3-pytest-cov libcmocka-dev' -U --env=DPKG_GENSYMBOLS_CHECK_LEVEL=0 --env=DEB_BUILD_OPTIONS=nocheck -- lxd autopkgtest/ubuntu/jammy/amd64
+          autopkgtest . --setup-commands='apt -y install ethtool python3-rich python3-pytest python3-pytest-cov python3-cffi libpython3-dev libcmocka-dev' -U --env=DPKG_GENSYMBOLS_CHECK_LEVEL=0 --env=DEB_BUILD_OPTIONS=nocheck -- lxd autopkgtest/ubuntu/jammy/amd64

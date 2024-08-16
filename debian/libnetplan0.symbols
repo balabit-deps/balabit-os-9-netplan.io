@@ -2,9 +2,13 @@ libnetplan.so.0.0 libnetplan0 #MINVER#
 * Build-Depends-Package: libnetplan-dev
  NETPLAN_OPTIONAL_ADDRESS_TYPES@Base 0.99
  NETPLAN_WIFI_WOWLAN_TYPES@Base 0.99
+ _netplan_address_iter_free@Base 0.107
+ _netplan_address_iter_next@Base 0.107
  _netplan_iter_defs_per_devtype_free@Base 0.104
  _netplan_iter_defs_per_devtype_init@Base 0.104
  _netplan_iter_defs_per_devtype_next@Base 0.104
+ _netplan_nameserver_iter_free@Base 0.107
+ _netplan_nameserver_iter_next@Base 0.107
  _netplan_netdef_get_critical@Base 0.105
  _netplan_netdef_get_delay_vf_rebind@Base 0.106
  _netplan_netdef_get_embedded_switch_mode@Base 0.106
@@ -15,8 +19,16 @@ libnetplan.so.0.0 libnetplan0 #MINVER#
  _netplan_netdef_get_vlan_link@Base 0.105
  _netplan_netdef_id@Base 0.104
  _netplan_netdef_is_trivial_compound_itf@Base 0.105
+ _netplan_netdef_new_address_iter@Base 0.107
+ _netplan_netdef_new_nameserver_iter@Base 0.107
+ _netplan_netdef_new_route_iter@Base 0.107
+ _netplan_netdef_new_search_domain_iter@Base 0.107
  _netplan_netdef_pertype_iter_free@Base 0.104
  _netplan_netdef_pertype_iter_next@Base 0.104
+ _netplan_route_iter_free@Base 0.107
+ _netplan_route_iter_next@Base 0.107
+ _netplan_search_domain_iter_free@Base 0.107
+ _netplan_search_domain_iter_next@Base 0.107
  _netplan_state_get_vf_count_for_def@Base 0.105
  _netplan_state_new_netdef_pertype_iter@Base 0.104
  _write_netplan_conf@Base 0.102
@@ -50,10 +62,13 @@ libnetplan.so.0.0 libnetplan0 #MINVER#
  netplan_netdef_get_bond_link@Base 0.106
  netplan_netdef_get_bridge_link@Base 0.106
  netplan_netdef_get_delay_virtual_functions_rebind@Base 0.104
+ netplan_netdef_get_dhcp4@Base 0.107
+ netplan_netdef_get_dhcp6@Base 0.107
  netplan_netdef_get_embedded_switch_mode@Base 0.104
  netplan_netdef_get_filename@Base 0.104
  netplan_netdef_get_filepath@Base 0.105
  netplan_netdef_get_id@Base 0.104
+ netplan_netdef_get_macaddress@Base 0.107
  netplan_netdef_get_output_filename@Base 0.106
  netplan_netdef_get_peer_link@Base 0.106
  netplan_netdef_get_set_name@Base 0.105

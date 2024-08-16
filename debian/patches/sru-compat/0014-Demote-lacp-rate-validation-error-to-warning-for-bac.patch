@@ -1,0 +1,41 @@
+From: Danilo Egea Gondolfo <danilogondolfo@gmail.com>
+Date: Tue, 19 Mar 2024 11:59:00 +0000
+Subject: parse: demote lacp-rate validation error to warning for backwards
+ compatibility
+
+This patch is related to https://github.com/canonical/netplan/pull/324
+In this PR we implement proper validation for the 'lacp-rate' option.
+As the parser was erroneouly accepting numeric values before, here we drop the
+error to a simple warning to prevent this change to break existing setups.
+
+---
+ src/parse.c                   | 2 +-
+ tests/generator/test_bonds.py | 2 +-
+ 2 files changed, 2 insertions(+), 2 deletions(-)
+
+diff --git a/src/parse.c b/src/parse.c
+index 1109adc..143f908 100644
+--- a/src/parse.c
++++ b/src/parse.c
+@@ -2278,7 +2278,7 @@ static gboolean
+ handle_bond_lacp_rate(NetplanParser* npp, yaml_node_t* node, const void* data, GError** error)
+ {
+     if (!(strcmp(scalar(node), "slow") == 0 || strcmp(scalar(node), "fast") == 0))
+-        return yaml_error(npp, node, error, "unknown lacp-rate value '%s' (expected 'fast' or 'slow')", scalar(node));
++        g_warning("unknown lacp-rate value '%s' (expected 'fast' or 'slow')", scalar(node));
+ 
+     return handle_netdef_str(npp, node, data, error);
+ }
+diff --git a/tests/generator/test_bonds.py b/tests/generator/test_bonds.py
+index bd5bdef..b645018 100644
+--- a/tests/generator/test_bonds.py
++++ b/tests/generator/test_bonds.py
+@@ -906,7 +906,7 @@ class TestConfigErrors(TestBase):
+       interfaces: [eno1]
+       parameters:
+         lacp-rate: abcd
+-      dhcp4: true''', expect_fail=True)
++      dhcp4: true''', expect_fail=False)
+         self.assertIn("unknown lacp-rate value 'abcd'", err)
+ 
+     def test_bond_invalid_arp_target(self):

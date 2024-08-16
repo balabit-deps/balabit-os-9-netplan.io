@@ -15,6 +15,10 @@
  * along with this program.  If not, see <http://www.gnu.org/licenses/>.
  */
 
+/*! \file netplan.h
+ *  \brief NetplanState and NetplanNetDefinition manipulation.
+ */
+
 #pragma once
 #include <stdlib.h>
 #include "types.h"
@@ -126,6 +130,15 @@ netplan_netdef_has_match(const NetplanNetDefinition* netdef);
 
 NETPLAN_PUBLIC gboolean
 netplan_netdef_match_interface(const NetplanNetDefinition* netdef, const char* name, const char* mac, const char* driver_name);
+
+NETPLAN_PUBLIC gboolean
+netplan_netdef_get_dhcp4(const NetplanNetDefinition* netdef);
+
+NETPLAN_PUBLIC gboolean
+netplan_netdef_get_dhcp6(const NetplanNetDefinition* netdef);
+
+NETPLAN_PUBLIC ssize_t
+netplan_netdef_get_macaddress(const NetplanNetDefinition* netdef, char* out_buffer, size_t out_buffer_size);
 
 /********** Old API below this ***********/
 

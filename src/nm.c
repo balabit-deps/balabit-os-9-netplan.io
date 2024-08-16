@@ -42,7 +42,7 @@
  * This is done by checking for certain modem_params, which are only
  * applicable to GSM connections.
  */
-static const gboolean
+static gboolean
 modem_is_gsm(const NetplanNetDefinition* def)
 {
     if (   def->modem_params.apn
@@ -60,7 +60,7 @@ modem_is_gsm(const NetplanNetDefinition* def)
 /**
  * Return NM "type=" string.
  */
-static const char*
+static char*
 type_str(const NetplanNetDefinition* def)
 {
     const NetplanDefType type = def->type;
@@ -86,6 +86,10 @@ type_str(const NetplanNetDefinition* def)
             return "vlan";
         case NETPLAN_DEF_TYPE_VRF:
             return "vrf";
+        case NETPLAN_DEF_TYPE_DUMMY:    /* wokeignore:rule=dummy */
+            return "dummy";             /* wokeignore:rule=dummy */
+        case NETPLAN_DEF_TYPE_VETH:
+            return "veth";
         case NETPLAN_DEF_TYPE_TUNNEL:
             if (def->tunnel.mode == NETPLAN_TUNNEL_MODE_WIREGUARD)
                 return "wireguard";
@@ -107,7 +111,7 @@ type_str(const NetplanNetDefinition* def)
 /**
  * Return NM wifi "mode=" string.
  */
-static const char*
+static char*
 wifi_mode_str(const NetplanWifiMode mode)
 {
     switch (mode) {
@@ -127,7 +131,7 @@ wifi_mode_str(const NetplanWifiMode mode)
 /**
  * Return NM wifi "band=" string.
  */
-static const char*
+static char*
 wifi_band_str(const NetplanWifiBand band)
 {
     switch (band) {
@@ -145,7 +149,7 @@ wifi_band_str(const NetplanWifiBand band)
 /**
  * Return NM addr-gen-mode string.
  */
-static const char*
+static char*
 addr_gen_mode_str(const NetplanAddrGenMode mode)
 {
     switch (mode) {
@@ -172,7 +176,7 @@ write_search_domains(const NetplanNetDefinition* def, const char* group, GKeyFil
 }
 
 static gboolean
-write_routes(const NetplanNetDefinition* def, GKeyFile *kf, int family, GError** error)
+write_routes_nm(const NetplanNetDefinition* def, GKeyFile *kf, gint family, GError** error)
 {
     const gchar* group = NULL;
     gchar* tmp_key = NULL;
@@ -198,7 +202,7 @@ write_routes(const NetplanNetDefinition* def, GKeyFile *kf, int family, GError**
                 destination = cur_route->to;
 
             if (cur_route->type && g_ascii_strcasecmp(cur_route->type, "unicast") != 0) {
-                g_set_error(error, G_MARKUP_ERROR, G_MARKUP_ERROR_INVALID_CONTENT, "ERROR: %s: NetworkManager only supports unicast routes\n", def->id);
+                g_set_error(error, NETPLAN_BACKEND_ERROR, NETPLAN_ERROR_UNSUPPORTED, "ERROR: %s: NetworkManager only supports unicast routes\n", def->id);
                 return FALSE;
             }
 
@@ -210,7 +214,7 @@ write_routes(const NetplanNetDefinition* def, GKeyFile *kf, int family, GError**
             tmp_key = g_strdup_printf("route%d", j);
             tmp_val = g_string_new(destination);
             if (cur_route->metric != NETPLAN_METRIC_UNSPEC)
-                g_string_append_printf(tmp_val, ",%s,%d", is_global ? cur_route->via : "",
+                g_string_append_printf(tmp_val, ",%s,%u", is_global ? cur_route->via : "",
                                        cur_route->metric);
             else if (is_global) // no metric, but global gateway
                 g_string_append_printf(tmp_val, ",%s", cur_route->via);
@@ -310,7 +314,7 @@ write_bond_parameters(const NetplanNetDefinition* def, GKeyFile *kf)
 }
 
 static void
-write_bridge_params(const NetplanNetDefinition* def, GKeyFile *kf)
+write_bridge_params_nm(const NetplanNetDefinition* def, GKeyFile *kf)
 {
     if (def->custom_bridging) {
         if (def->bridge_params.ageing_time)
@@ -330,51 +334,56 @@ write_bridge_params(const NetplanNetDefinition* def, GKeyFile *kf)
 static gboolean
 write_wireguard_params(const NetplanNetDefinition* def, GKeyFile *kf, GError** error)
 {
-    g_assert(def->tunnel.private_key);
-
     /* The key was already validated via validate_tunnel_grammar(), but we need
      * to differentiate between base64 key VS absolute path key-file. And a base64
      * string could (theoretically) start with '/', so we use is_wireguard_key()
      * as well to check for more specific characteristics (if needed). */
-    if (def->tunnel.private_key[0] == '/' && !is_wireguard_key(def->tunnel.private_key)) {
-        g_set_error(error, G_MARKUP_ERROR, G_MARKUP_ERROR_INVALID_CONTENT, "%s: private key needs to be base64 encoded when using the NM backend\n", def->id);
-        return FALSE;
-    } else
-        g_key_file_set_string(kf, "wireguard", "private-key", def->tunnel.private_key);
+    if (def->tunnel.private_key) {
+        if (def->tunnel.private_key[0] == '/' && !is_wireguard_key(def->tunnel.private_key)) {
+            g_set_error(error, NETPLAN_BACKEND_ERROR, NETPLAN_ERROR_VALIDATION, "%s: private key needs to be base64 encoded when using the NM backend\n", def->id);
+            return FALSE;
+        } else
+            g_key_file_set_string(kf, "wireguard", "private-key", def->tunnel.private_key);
+    }
+
+    if (def->tunnel_private_key_flags != NETPLAN_KEY_FLAG_NONE)
+        g_key_file_set_uint64(kf, "wireguard", "private-key-flags", def->tunnel_private_key_flags);
 
     if (def->tunnel.port)
         g_key_file_set_uint64(kf, "wireguard", "listen-port", def->tunnel.port);
     if (def->tunnel.fwmark)
         g_key_file_set_uint64(kf, "wireguard", "fwmark", def->tunnel.fwmark);
 
-    for (guint i = 0; i < def->wireguard_peers->len; i++) {
-        NetplanWireguardPeer *peer = g_array_index (def->wireguard_peers, NetplanWireguardPeer*, i);
-        g_assert(peer->public_key);
-        g_autofree gchar* tmp_group = g_strdup_printf("wireguard-peer.%s", peer->public_key);
+    if (def->wireguard_peers) {
+        for (guint i = 0; i < def->wireguard_peers->len; i++) {
+            NetplanWireguardPeer *peer = g_array_index (def->wireguard_peers, NetplanWireguardPeer*, i);
+            g_assert(peer->public_key);
+            g_autofree gchar* tmp_group = g_strdup_printf("wireguard-peer.%s", peer->public_key);
 
-        if (peer->keepalive)
-            g_key_file_set_integer(kf, tmp_group, "persistent-keepalive", peer->keepalive);
-        if (peer->endpoint)
-            g_key_file_set_string(kf, tmp_group, "endpoint", peer->endpoint);
+            if (peer->keepalive)
+                g_key_file_set_integer(kf, tmp_group, "persistent-keepalive", peer->keepalive);
+            if (peer->endpoint)
+                g_key_file_set_string(kf, tmp_group, "endpoint", peer->endpoint);
 
-        /* The key was already validated via validate_tunnel_grammar(), but we need
-         * to differentiate between base64 key VS absolute path key-file. And a base64
-         * string could (theoretically) start with '/', so we use is_wireguard_key()
-         * as well to check for more specific characteristics (if needed). */
-        if (peer->preshared_key) {
-            if (peer->preshared_key[0] == '/' && !is_wireguard_key(peer->preshared_key)) {
-                g_set_error(error, G_MARKUP_ERROR, G_MARKUP_ERROR_INVALID_CONTENT, "%s: shared key needs to be base64 encoded when using the NM backend\n", def->id);
-                return FALSE;
-            } else {
-                g_key_file_set_value(kf, tmp_group, "preshared-key", peer->preshared_key);
-                g_key_file_set_uint64(kf, tmp_group, "preshared-key-flags", 0);
+            /* The key was already validated via validate_tunnel_grammar(), but we need
+             * to differentiate between base64 key VS absolute path key-file. And a base64
+             * string could (theoretically) start with '/', so we use is_wireguard_key()
+             * as well to check for more specific characteristics (if needed). */
+            if (peer->preshared_key) {
+                if (peer->preshared_key[0] == '/' && !is_wireguard_key(peer->preshared_key)) {
+                    g_set_error(error, NETPLAN_BACKEND_ERROR, NETPLAN_ERROR_VALIDATION, "%s: shared key needs to be base64 encoded when using the NM backend\n", def->id);
+                    return FALSE;
+                } else {
+                    g_key_file_set_value(kf, tmp_group, "preshared-key", peer->preshared_key);
+                    g_key_file_set_uint64(kf, tmp_group, "preshared-key-flags", 0);
+                }
             }
-        }
-        if (peer->allowed_ips && peer->allowed_ips->len > 0) {
-            const gchar* list[peer->allowed_ips->len];
-            for (guint j = 0; j < peer->allowed_ips->len; ++j)
-                list[j] = g_array_index(peer->allowed_ips, char*, j);
-            g_key_file_set_string_list(kf, tmp_group, "allowed-ips", list, peer->allowed_ips->len);
+            if (peer->allowed_ips && peer->allowed_ips->len > 0) {
+                const gchar* list[peer->allowed_ips->len];
+                for (guint j = 0; j < peer->allowed_ips->len; ++j)
+                    list[j] = g_array_index(peer->allowed_ips, char*, j);
+                g_key_file_set_string_list(kf, tmp_group, "allowed-ips", list, peer->allowed_ips->len);
+            }
         }
     }
     return TRUE;
@@ -384,7 +393,8 @@ static void
 write_tunnel_params(const NetplanNetDefinition* def, GKeyFile *kf)
 {
     g_key_file_set_integer(kf, "ip-tunnel", "mode", def->tunnel.mode);
-    g_key_file_set_string(kf, "ip-tunnel", "local", def->tunnel.local_ip);
+    if (def->tunnel.local_ip)
+        g_key_file_set_string(kf, "ip-tunnel", "local", def->tunnel.local_ip);
     g_key_file_set_string(kf, "ip-tunnel", "remote", def->tunnel.remote_ip);
     if (def->tunnel_ttl)
         g_key_file_set_uint64(kf, "ip-tunnel", "ttl", def->tunnel_ttl);
@@ -407,6 +417,12 @@ write_dot1x_auth_parameters(const NetplanAuthenticationSettings* auth, GKeyFile 
         case NETPLAN_AUTH_EAP_TTLS:
             g_key_file_set_string(kf, "802-1x", "eap", "ttls");
             break;
+        case NETPLAN_AUTH_EAP_LEAP:
+            g_key_file_set_string(kf, "802-1x", "eap", "leap");
+            break;
+        case NETPLAN_AUTH_EAP_PWD:
+            g_key_file_set_string(kf, "802-1x", "eap", "pwd");
+            break;
         default: break;  // LCOV_EXCL_LINE
     }
 
@@ -414,7 +430,11 @@ write_dot1x_auth_parameters(const NetplanAuthenticationSettings* auth, GKeyFile 
         g_key_file_set_string(kf, "802-1x", "identity", auth->identity);
     if (auth->anonymous_identity)
         g_key_file_set_string(kf, "802-1x", "anonymous-identity", auth->anonymous_identity);
-    if (auth->password && auth->key_management != NETPLAN_AUTH_KEY_MANAGEMENT_WPA_PSK)
+    /* auth->password might contain the PSK if it was defined inside the auth key in the YAML file.
+     * We only write auth-password in [802-1x].password if it's not a PSK used by either PSK or SAE
+     * or if an EAP method was defined.
+     */
+    if (auth->password && (!_is_auth_key_management_psk(auth) || auth->eap_method != NETPLAN_AUTH_EAP_NONE))
         g_key_file_set_string(kf, "802-1x", "password", auth->password);
     if (auth->ca_certificate)
         g_key_file_set_string(kf, "802-1x", "ca-cert", auth->ca_certificate);
@@ -438,7 +458,15 @@ write_wifi_auth_parameters(const NetplanAuthenticationSettings* auth, GKeyFile *
             g_key_file_set_string(kf, "wifi-security", "key-mgmt", "wpa-psk");
             break;
         case NETPLAN_AUTH_KEY_MANAGEMENT_WPA_EAP:
+        case NETPLAN_AUTH_KEY_MANAGEMENT_WPA_EAPSHA256:
+            /* NM uses "wpa-eap" to enable both EAP and EAP-SHA256 */
             g_key_file_set_string(kf, "wifi-security", "key-mgmt", "wpa-eap");
+            break;
+        case NETPLAN_AUTH_KEY_MANAGEMENT_WPA_EAPSUITE_B_192:
+            g_key_file_set_string(kf, "wifi-security", "key-mgmt", "wpa-eap-suite-b-192");
+            break;
+        case NETPLAN_AUTH_KEY_MANAGEMENT_WPA_SAE:
+            g_key_file_set_string(kf, "wifi-security", "key-mgmt", "sae");
             break;
         case NETPLAN_AUTH_KEY_MANAGEMENT_8021X:
             g_key_file_set_string(kf, "wifi-security", "key-mgmt", "ieee8021x");
@@ -446,9 +474,27 @@ write_wifi_auth_parameters(const NetplanAuthenticationSettings* auth, GKeyFile *
         default: break; // LCOV_EXCL_LINE
     }
 
-    if (auth->eap_method != NETPLAN_AUTH_EAP_NONE)
-        write_dot1x_auth_parameters(auth, kf);
-    else if (auth->password)
+    if (auth->key_management != NETPLAN_AUTH_KEY_MANAGEMENT_8021X) {
+        switch (auth->pmf_mode) {
+            case NETPLAN_AUTH_PMF_MODE_NONE:
+            case NETPLAN_AUTH_PMF_MODE_DISABLED:
+                break;
+
+            case NETPLAN_AUTH_PMF_MODE_OPTIONAL:
+                g_key_file_set_integer(kf, "wifi-security", "pmf", 2);
+                break;
+
+            case NETPLAN_AUTH_PMF_MODE_REQUIRED:
+                g_key_file_set_integer(kf, "wifi-security", "pmf", 3);
+                break;
+        }
+    }
+
+    write_dot1x_auth_parameters(auth, kf);
+
+    if (auth->psk)
+        g_key_file_set_string(kf, "wifi-security", "psk", auth->psk);
+    else if (auth->password && _is_auth_key_management_psk(auth))
         g_key_file_set_string(kf, "wifi-security", "psk", auth->password);
 }
 
@@ -509,7 +555,7 @@ write_vxlan_parameters(const NetplanNetDefinition* def, GKeyFile* kf)
         }
     }
 
-    if (def->vxlan->checksums || def->vxlan->extensions || def->vxlan->flow_label != G_MAXUINT || def->vxlan->do_not_fragment)
+    if (def->vxlan->checksums || def->vxlan->extensions || def->vxlan->flow_label != G_MAXUINT || def->vxlan->do_not_fragment != NETPLAN_TRISTATE_UNSET)
         g_warning("%s: checksums/extensions/flow-lable/do-not-fragment are not supported by NetworkManager\n", def->id);
 }
 
@@ -580,6 +626,7 @@ write_nm_conf_access_point(const NetplanNetDefinition* def, const char* rootdir,
     g_autoptr(GKeyFile) kf = NULL;
     g_autofree gchar* conf_path = NULL;
     g_autofree gchar* full_path = NULL;
+    g_autofree gchar* nm_run_path = NULL;
     g_autofree gchar* nd_nm_id = NULL;
     const gchar* nm_type = NULL;
     gchar* tmp_key = NULL;
@@ -632,7 +679,7 @@ write_nm_conf_access_point(const NetplanNetDefinition* def, const char* rootdir,
         /* XXX: For now NetworkManager only supports the "manual" activation
          * mode */
         if (!!g_strcmp0(def->activation_mode, "manual")) {
-            g_set_error(error, G_MARKUP_ERROR, G_MARKUP_ERROR_INVALID_CONTENT, "ERROR: %s: NetworkManager definitions do not support activation-mode %s\n", def->id, def->activation_mode);
+            g_set_error(error, NETPLAN_BACKEND_ERROR, NETPLAN_ERROR_UNSUPPORTED, "ERROR: %s: NetworkManager definitions do not support activation-mode %s\n", def->id, def->activation_mode);
             return FALSE;
         }
         /* "manual" */
@@ -662,11 +709,15 @@ write_nm_conf_access_point(const NetplanNetDefinition* def, const char* rootdir,
             g_key_file_set_string(kf, "connection", "interface-name", def->id);
 
         if (def->type == NETPLAN_DEF_TYPE_BRIDGE)
-            write_bridge_params(def, kf);
+            write_bridge_params_nm(def, kf);
         if (def->type == NETPLAN_DEF_TYPE_VRF) {
             g_key_file_set_uint64(kf, "vrf", "table", def->vrf_table);
-            if (!write_routes(def, kf, AF_INET, error) || !write_routes(def, kf, AF_INET6, error))
+            if (!write_routes_nm(def, kf, AF_INET, error) || !write_routes_nm(def, kf, AF_INET6, error))
                 return FALSE;
+        }
+
+        if (def->type == NETPLAN_DEF_TYPE_VETH) {
+            g_key_file_set_string(kf, "veth", "peer", def->veth_peer_link->id);
         }
     }
     if (def->type == NETPLAN_DEF_TYPE_MODEM) {
@@ -720,7 +771,7 @@ write_nm_conf_access_point(const NetplanNetDefinition* def, const char* rootdir,
     }
 
     if (def->ipv6_mtubytes) {
-        g_set_error(error, G_MARKUP_ERROR, G_MARKUP_ERROR_INVALID_CONTENT, "ERROR: %s: NetworkManager definitions do not support ipv6-mtu\n", def->id);
+        g_set_error(error, NETPLAN_BACKEND_ERROR, NETPLAN_ERROR_UNSUPPORTED, "ERROR: %s: NetworkManager definitions do not support ipv6-mtu\n", def->id);
         return FALSE;
     }
 
@@ -814,7 +865,7 @@ write_nm_conf_access_point(const NetplanNetDefinition* def, const char* rootdir,
     /* We can only write search domains and routes if we have an address */
     if (def->ip4_addresses || def->dhcp4) {
         write_search_domains(def, "ipv4", kf);
-        if (!write_routes(def, kf, AF_INET, error))
+        if (!write_routes_nm(def, kf, AF_INET, error))
             return FALSE;
     }
 
@@ -859,7 +910,7 @@ write_nm_conf_access_point(const NetplanNetDefinition* def, const char* rootdir,
         write_search_domains(def, "ipv6", kf);
 
         /* We can only write valid routes if there is a DHCPv6 or static IPv6 address */
-        if (!write_routes(def, kf, AF_INET6, error))
+        if (!write_routes_nm(def, kf, AF_INET6, error))
             return FALSE;
 
         if (!def->dhcp6_overrides.use_routes) {
@@ -924,8 +975,16 @@ write_nm_conf_access_point(const NetplanNetDefinition* def, const char* rootdir,
         }
     }
 
-    /* NM connection files might contain secrets, and NM insists on tight permissions */
+    /* Create /run/NetworkManager/ with 755 permissions if the folder is missing.
+     * Letting the next invokation of safe_mkdir_p_dir do it would result in 
+     * more restrictive access because of the call to umask. */
+    nm_run_path = g_strjoin(G_DIR_SEPARATOR_S, rootdir ?: "", "run/NetworkManager/", NULL);
+    if (!g_file_test(nm_run_path, G_FILE_TEST_EXISTS))
+        safe_mkdir_p_dir(nm_run_path);
+
     full_path = g_strjoin(G_DIR_SEPARATOR_S, rootdir ?: "", conf_path, NULL);
+
+    /* NM connection files might contain secrets, and NM insists on tight permissions */
     orig_umask = umask(077);
     safe_mkdir_p_dir(full_path);
     if (!g_key_file_save_to_file(kf, full_path, error))
@@ -942,13 +1001,17 @@ write_nm_conf_access_point(const NetplanNetDefinition* def, const char* rootdir,
  */
 gboolean
 netplan_netdef_write_nm(
-        const NetplanState* np_state,
+        __unused const NetplanState* np_state,
         const NetplanNetDefinition* netdef,
         const char* rootdir,
         gboolean* has_been_written,
         GError** error)
 {
     gboolean no_error = TRUE;
+
+    /* Placeholder interfaces are not supposed to be rendered */
+    if (netdef->type == NETPLAN_DEF_TYPE_NM_PLACEHOLDER_)
+        return TRUE;
 
     SET_OPT_OUT_PTR(has_been_written, FALSE);
     if (netdef->backend != NETPLAN_BACKEND_NM) {
@@ -957,13 +1020,22 @@ netplan_netdef_write_nm(
     }
 
     if (netdef->match.driver && !netdef->set_name) {
-        g_set_error(error, G_MARKUP_ERROR, G_MARKUP_ERROR_INVALID_CONTENT, "ERROR: %s: NetworkManager definitions do not support matching by driver\n", netdef->id);
+        g_set_error(error, NETPLAN_BACKEND_ERROR, NETPLAN_ERROR_UNSUPPORTED, "ERROR: %s: NetworkManager definitions do not support matching by driver\n", netdef->id);
         return FALSE;
     }
 
     if (netdef->address_options) {
-        g_set_error(error, G_MARKUP_ERROR, G_MARKUP_ERROR_INVALID_CONTENT, "ERROR: %s: NetworkManager does not support address options\n", netdef->id);
+        g_set_error(error, NETPLAN_BACKEND_ERROR, NETPLAN_ERROR_UNSUPPORTED, "ERROR: %s: NetworkManager does not support address options\n", netdef->id);
         return FALSE;
+    }
+
+    if (netdef->type == NETPLAN_DEF_TYPE_VETH) {
+        /*
+         * Final validation of veths that can't be fully done during parsing due to the
+         * order the interfaces are parsed.
+         */
+        if (!validate_veth_pair(np_state, netdef, error))
+            return FALSE;
     }
 
     if (netdef->type == NETPLAN_DEF_TYPE_WIFI) {
@@ -986,13 +1058,16 @@ gboolean
 netplan_state_finish_nm_write(
         const NetplanState* np_state,
         const char* rootdir,
-        GError** error)
+        __unused GError** error)
 {
     GString* udev_rules = g_string_new(NULL);
-    GString *nm_conf = g_string_new(NULL);
+    GString* nm_conf = g_string_new(NULL);
 
-    if (netplan_state_get_netdefs_size(np_state) == 0)
-        return TRUE; // LCOV_EXCL_LINE as generate.c already deals with it.
+    if (netplan_state_get_netdefs_size(np_state) == 0) {
+        g_string_free(udev_rules, TRUE);
+        g_string_free(nm_conf, TRUE);
+        return TRUE;
+    }
 
     /* Set all devices not managed by us to unmanaged, so that NM does not
      * auto-connect and interferes.

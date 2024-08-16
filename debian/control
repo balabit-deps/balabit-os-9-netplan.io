@@ -16,6 +16,7 @@ Build-Depends:
  libglib2.0-dev,
  uuid-dev,
  python3,
+ python3-cffi,
  python3-coverage <!nocheck>,
  python3-dbus <!nocheck>,
  python3-pytest <!nocheck>,
@@ -23,6 +24,7 @@ Build-Depends:
  python3-yaml <!nocheck>,
  python3-netifaces <!nocheck>,
  libcmocka-dev,
+ libpython3-dev,
  libsystemd-dev,
  systemd,
  dbus-x11 <!nocheck>,
@@ -43,16 +45,14 @@ Depends:
  ${misc:Depends},
  iproute2,
  libnetplan0 (= ${binary:Version}),
+ netplan-generator,
  python3,
  python3-dbus,
+ python3-netplan,
  python3-yaml,
  python3-netifaces,
  systemd (>= 248~),
-Suggests:
- network-manager | wpasupplicant,
- openvswitch-switch,
- python3-rich,
- iw,
+Suggests: python3-rich
 Conflicts: netplan
 Breaks: nplan (<< 0.34~)
 Replaces: nplan (<< 0.34~)
@@ -65,6 +65,55 @@ Description: YAML network configuration abstraction for various backends
  networking daemon.
  .
  Currently supported backends are networkd and NetworkManager.
+
+Package: netplan-generator
+Architecture: linux-any
+Multi-Arch: foreign
+Depends:
+ ${shlibs:Depends},
+ ${misc:Depends},
+ libnetplan0 (= ${binary:Version}),
+ systemd (>= 248~),
+Suggests:
+ network-manager | wpasupplicant,
+ openvswitch-switch,
+ iw,
+Breaks: netplan.io (<< 0.106.1-8~),
+Replaces: netplan.io (<< 0.106.1-8~),
+Description: YAML network configuration abstraction systemd-generator
+ netplan reads YAML network configuration files which are written
+ by administrators, installers, cloud image instantiations, or other OS
+ deployments. During early boot it then generates backend specific
+ configuration files in /run to hand off control of devices to a particular
+ networking daemon.
+ .
+ Currently supported backends are networkd and NetworkManager.
+ .
+ This package provides a systemd-generator to configure networking daemons
+ at boot time.
+
+Package: python3-netplan
+Section: python
+Architecture: linux-any
+Multi-Arch: foreign
+Depends:
+ ${shlibs:Depends},
+ ${misc:Depends},
+ libnetplan0 (= ${binary:Version}),
+ python3,
+ python3-cffi-backend,
+Breaks: netplan.io (<< 0.107-3~)
+Replaces: netplan.io (<< 0.107-3~)
+Description: YAML network configuration abstraction Python bindings
+ netplan reads YAML network configuration files which are written
+ by administrators, installers, cloud image instantiations, or other OS
+ deployments. During early boot it then generates backend specific
+ configuration files in /run to hand off control of devices to a particular
+ networking daemon.
+ .
+ Currently supported backends are networkd and NetworkManager.
+ .
+ This package provides a CFFI based Python bindings to libnetplan.
 
 Package: libnetplan0
 Section: libs

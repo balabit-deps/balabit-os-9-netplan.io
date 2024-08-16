@@ -1,9 +1,9 @@
 project('netplan', 'c',
-        version: '0.106.1',
+        version: '0.107',
         license: 'GPL3',
         default_options: [
             'c_std=c99',
-            'warning_level=1',
+            'warning_level=2',
             'werror=true',
         ],
         meson_version: '>= 0.61.0',
@@ -36,10 +36,12 @@ add_project_arguments(
     language: 'c')
 
 inc = include_directories('include')
+inc_internal = include_directories('src')
 subdir('include')
 subdir('src')
 subdir('dbus')
-subdir('netplan')
+subdir('netplan_cli')
+subdir('python-cffi')
 subdir('examples')
 subdir('doc')
 
@@ -60,7 +62,7 @@ install_data(
 # Testing #
 ###########
 test_env = [
-    'PYTHONPATH=' + meson.current_source_dir(),
+    'PYTHONPATH=' + join_paths(meson.current_build_dir(), 'python-cffi') + ':' + meson.current_source_dir(),
     'LD_LIBRARY_PATH=' + join_paths(meson.current_build_dir(), 'src'),
     'NETPLAN_GENERATE_PATH=' + join_paths(meson.current_build_dir(), 'src', 'generate'),
     'NETPLAN_DBUS_CMD=' + join_paths(meson.current_build_dir(), 'dbus', 'netplan-dbus'),
@@ -75,16 +77,19 @@ endif
 #FIXME: exclude doc/env/
 test('linting',
      pyflakes,
+     timeout: 100,
      args: [meson.current_source_dir()])
 test('codestyle',
      pycodestyle,
-     args: ['--max-line-length=130', '--exclude=doc/env', meson.current_source_dir()])
+     timeout: 100,
+     args: ['--max-line-length=130', '--exclude=doc/env,*meson-private/pycompile.py', meson.current_source_dir()])
 test('documentation',
      find_program('tests/validate_docs.sh'),
+     timeout: 100,
      workdir: meson.current_source_dir())
 test('legacy-tests',
      find_program('tests/cli_legacy.py'),
-     timeout: 120,
+     timeout: 600,
      env: test_env)
 #TODO: split out dbus tests into own test() instance, to run in parallel
 test('unit-tests',
@@ -104,11 +109,17 @@ if get_option('b_coverage')
     gcovr = find_program('gcovr')
     ninja = find_program('ninja')
     grep  = find_program('grep')
+    cat  = find_program('cat')
     test('coverage-c-output',
          find_program('ninja'),
          args: ['-C', meson.current_build_dir(), 'coverage'],
          timeout: 60,
          priority: -90, # run before 'coverage-c'
+         is_parallel: false)
+    test('coverage-c-cat',
+         cat,
+         args: [join_paths(meson.current_build_dir(), 'meson-logs', 'coverage.txt')],
+         priority: -98, # run before 'coverage-c'
          is_parallel: false)
     test('coverage-c',
          grep,
@@ -123,12 +134,12 @@ if get_option('b_coverage')
     test('coverage-py-output',
          pycoverage,
          args: ['html', '-d', join_paths(meson.current_build_dir(),
-                'meson-logs', 'coveragereport-py'), '--omit=/usr*'],
+                'meson-logs', 'coveragereport-py'), '--omit=/usr/*'],
          priority: -95, # run before 'coverage-py'
          is_parallel: false)
     test('coverage-py',
          pycoverage,
-         args: ['report', '--omit=/usr*', '--show-missing', '--fail-under=100'],
+         args: ['report', '--omit=/usr/*', '--show-missing', '--fail-under=100'],
          priority: -99, # run last
          is_parallel: false)
 endif

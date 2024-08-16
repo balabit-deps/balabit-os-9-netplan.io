@@ -96,15 +96,21 @@ validate_ovs_target(gboolean host_first, gchar* s) {
             gchar* tmp = NULL;
             tmp = s+1; //get rid of leading '['
             // append default port to unify parsing
-            if (!g_strrstr(tmp, "]:"))
-                vec = g_strsplit(g_strdup_printf("%s:%u", tmp, dport), "]:", 2);
+            if (!g_strrstr(tmp, "]:")) {
+                gchar* host_port = g_strdup_printf("%s:%u", tmp, dport);
+                vec = g_strsplit(host_port, "]:", 2);
+                g_free(host_port);
+            }
             else
                 vec = g_strsplit(tmp, "]:", 2);
         // IP4 host
         } else {
             // append default port to unify parsing
-            if (!g_strrstr(s, ":"))
-                vec = g_strsplit(g_strdup_printf("%s:%u", s, dport), ":", 2);
+            if (!g_strrstr(s, ":")) {
+                gchar* host_port = g_strdup_printf("%s:%u", s, dport);
+                vec = g_strsplit(host_port, ":", 2);
+                g_free(host_port);
+            }
             else
                 vec = g_strsplit(s, ":", 2);
         }
@@ -199,28 +205,31 @@ static gboolean
 validate_tunnel_grammar(const NetplanParser* npp, NetplanNetDefinition* nd, yaml_node_t* node, GError** error)
 {
     if (nd->tunnel.mode == NETPLAN_TUNNEL_MODE_UNKNOWN)
-        return yaml_error(npp, node, error, "%s: missing 'mode' property for tunnel", nd->id);
+        return yaml_error(npp, node, error, "%s: missing or invalid 'mode' property for tunnel", nd->id);
 
     if (nd->tunnel.mode == NETPLAN_TUNNEL_MODE_WIREGUARD) {
-        if (!nd->tunnel.private_key)
-            return yaml_error(npp, node, error, "%s: missing 'key' property (private key) for wireguard", nd->id);
-        if (nd->tunnel.private_key[0] != '/' && !is_wireguard_key(nd->tunnel.private_key))
+        if (!nd->tunnel.private_key && nd->tunnel_private_key_flags == NETPLAN_KEY_FLAG_NONE)
+            g_warning("%s: missing 'key' property (private key) for wireguard", nd->id);
+        if (nd->tunnel.private_key && nd->tunnel.private_key[0] != '/' && !is_wireguard_key(nd->tunnel.private_key))
             return yaml_error(npp, node, error, "%s: invalid wireguard private key", nd->id);
-        if (!nd->wireguard_peers || nd->wireguard_peers->len == 0)
-            return yaml_error(npp, node, error, "%s: at least one peer is required.", nd->id);
-        for (guint i = 0; i < nd->wireguard_peers->len; i++) {
-            NetplanWireguardPeer *peer = g_array_index (nd->wireguard_peers, NetplanWireguardPeer*, i);
+        if (!nd->wireguard_peers || nd->wireguard_peers->len == 0) {
+            g_warning("%s: at least one peer is required.", nd->id);
+        } else {
+            for (guint i = 0; i < nd->wireguard_peers->len; i++) {
+                NetplanWireguardPeer *peer = g_array_index (nd->wireguard_peers, NetplanWireguardPeer*, i);
 
-            if (!peer->public_key)
-                return yaml_error(npp, node, error, "%s: keys.public is required.", nd->id);
-            if (!is_wireguard_key(peer->public_key))
-                return yaml_error(npp, node, error, "%s: invalid wireguard public key", nd->id);
-            if (peer->preshared_key && peer->preshared_key[0] != '/' && !is_wireguard_key(peer->preshared_key))
-                return yaml_error(npp, node, error, "%s: invalid wireguard shared key", nd->id);
-            if (!peer->allowed_ips || peer->allowed_ips->len == 0)
-                return yaml_error(npp, node, error, "%s: 'allowed-ips' is required for wireguard peers.", nd->id);
-            if (peer->keepalive > 65535)
-                return yaml_error(npp, node, error, "%s: keepalive must be 0-65535 inclusive.", nd->id);
+                if (!peer->allowed_ips || peer->allowed_ips->len == 0)
+                    g_warning("%s: 'allowed-ips' is required for wireguard peers.", nd->id);
+                if (peer->keepalive > 65535)
+                    return yaml_error(npp, node, error, "%s: keepalive must be 0-65535 inclusive.", nd->id);
+
+                if (!peer->public_key)
+                    return yaml_error(npp, node, error, "%s: a public key is required.", nd->id);
+                if (!is_wireguard_key(peer->public_key))
+                    return yaml_error(npp, node, error, "%s: invalid wireguard public key", nd->id);
+                if (peer->preshared_key && peer->preshared_key[0] != '/' && !is_wireguard_key(peer->preshared_key))
+                    return yaml_error(npp, node, error, "%s: invalid wireguard shared key", nd->id);
+            }
         }
         return TRUE;
     } else {
@@ -232,8 +241,6 @@ validate_tunnel_grammar(const NetplanParser* npp, NetplanNetDefinition* nd, yaml
 
     /* Validate local/remote IPs */
     if (nd->tunnel.mode != NETPLAN_TUNNEL_MODE_VXLAN) {
-        if (!nd->tunnel.local_ip)
-            return yaml_error(npp, node, error, "%s: missing 'local' property for tunnel", nd->id);
         if (!nd->tunnel.remote_ip)
             return yaml_error(npp, node, error, "%s: missing 'remote' property for tunnel", nd->id);
     }
@@ -246,7 +253,7 @@ validate_tunnel_grammar(const NetplanParser* npp, NetplanNetDefinition* nd, yaml
         case NETPLAN_TUNNEL_MODE_IP6GRE:
         case NETPLAN_TUNNEL_MODE_IP6GRETAP:
         case NETPLAN_TUNNEL_MODE_VTI6:
-            if (!is_ip6_address(nd->tunnel.local_ip))
+            if (nd->tunnel.local_ip && !is_ip6_address(nd->tunnel.local_ip))
                 return yaml_error(npp, node, error, "%s: 'local' must be a valid IPv6 address for this tunnel type", nd->id);
             if (!is_ip6_address(nd->tunnel.remote_ip))
                 return yaml_error(npp, node, error, "%s: 'remote' must be a valid IPv6 address for this tunnel type", nd->id);
@@ -259,7 +266,7 @@ validate_tunnel_grammar(const NetplanParser* npp, NetplanNetDefinition* nd, yaml
             break;
 
         default:
-            if (!is_ip4_address(nd->tunnel.local_ip))
+            if (nd->tunnel.local_ip && !is_ip4_address(nd->tunnel.local_ip))
                 return yaml_error(npp, node, error, "%s: 'local' must be a valid IPv4 address for this tunnel type", nd->id);
             if (!is_ip4_address(nd->tunnel.remote_ip))
                 return yaml_error(npp, node, error, "%s: 'remote' must be a valid IPv4 address for this tunnel type", nd->id);
@@ -310,16 +317,9 @@ validate_tunnel_backend_rules(const NetplanParser* npp, NetplanNetDefinition* nd
                 case NETPLAN_TUNNEL_MODE_GRE:
                 case NETPLAN_TUNNEL_MODE_IP6GRE:
                 case NETPLAN_TUNNEL_MODE_WIREGUARD:
-                    break;
-
                 case NETPLAN_TUNNEL_MODE_GRETAP:
                 case NETPLAN_TUNNEL_MODE_IP6GRETAP:
-                    return yaml_error(npp, node, error,
-                                      "%s: %s tunnel mode is not supported by NetworkManager",
-                                      nd->id,
-                                      g_ascii_strup(netplan_tunnel_mode_name(nd->tunnel.mode), -1));
                     break;
-
                 default:
                     if (nd->tunnel.input_key)
                         return yaml_error(npp, node, error, "%s: 'input-key' is not required for this tunnel type", nd->id);
@@ -389,6 +389,11 @@ validate_netdef_grammar(const NetplanParser* npp, NetplanNetDefinition* nd, GErr
         valid = validate_tunnel_grammar(npp, nd, NULL, error);
         if (!valid)
             goto netdef_grammar_error;
+    }
+
+    if (nd->type == NETPLAN_DEF_TYPE_VETH) {
+        if (!nd->veth_peer_link)
+            return yaml_error(npp, NULL, error, "%s: virtual-ethernet missing 'peer' property", nd->id);
     }
 
     if (nd->ip6_addr_gen_mode != NETPLAN_ADDRGEN_DEFAULT && nd->ip6_addr_gen_token)
@@ -484,7 +489,7 @@ sriov_rules_error:
 }
 
 gboolean
-adopt_and_validate_vrf_routes(const NetplanParser *npp, GHashTable *netdefs, GError **error)
+adopt_and_validate_vrf_routes(__unused const NetplanParser *npp, GHashTable *netdefs, GError **error)
 {
     gpointer key, value;
     GHashTableIter iter;
@@ -504,7 +509,7 @@ adopt_and_validate_vrf_routes(const NetplanParser *npp, GHashTable *netdefs, GEr
                     g_debug("%s: Ignoring redundant routes table %d (matches VRF table)", nd->id, r->table);
                     continue;
                 } else if (r->table != NETPLAN_ROUTE_TABLE_UNSPEC) {
-                    g_set_error(error, G_MARKUP_ERROR, G_MARKUP_ERROR_INVALID_CONTENT,
+                    g_set_error(error, NETPLAN_VALIDATION_ERROR, NETPLAN_ERROR_CONFIG_GENERIC,
                             "%s: VRF routes table mismatch (%d != %d)", nd->id, nd->vrf_table, r->table);
                     return FALSE;
                 } else {
@@ -522,7 +527,7 @@ adopt_and_validate_vrf_routes(const NetplanParser *npp, GHashTable *netdefs, GEr
                     g_debug("%s: Ignoring redundant routing-policy table %d (matches VRF table)", nd->id, r->table);
                     continue;
                 } else if (r->table != NETPLAN_ROUTE_TABLE_UNSPEC && r->table != nd->vrf_table) {
-                    g_set_error(error, G_MARKUP_ERROR, G_MARKUP_ERROR_INVALID_CONTENT,
+                    g_set_error(error, NETPLAN_VALIDATION_ERROR, NETPLAN_ERROR_CONFIG_GENERIC,
                             "%s: VRF routing-policy table mismatch (%d != %d)", nd->id, nd->vrf_table, r->table);
                     return FALSE;
                 } else {
@@ -537,9 +542,9 @@ adopt_and_validate_vrf_routes(const NetplanParser *npp, GHashTable *netdefs, GEr
 }
 
 struct _defroute_entry {
-    int family;
-    int table;
-    int metric;
+    gint family;
+    guint table;
+    guint metric;
     const char *netdef_id;
 };
 
@@ -559,9 +564,9 @@ defroute_err(struct _defroute_entry *entry, const char *new_netdef_id, GError **
     if (entry->metric == NETPLAN_METRIC_UNSPEC)
         strncpy(metric_name, "metric: default", sizeof(metric_name) - 1);
     else
-        snprintf(metric_name, sizeof(metric_name) - 1, "metric: %d", entry->metric);
+        snprintf(metric_name, sizeof(metric_name) - 1, "metric: %u", entry->metric);
 
-    g_set_error(error, G_MARKUP_ERROR, G_MARKUP_ERROR_INVALID_CONTENT,
+    g_set_error(error, NETPLAN_VALIDATION_ERROR, NETPLAN_ERROR_CONFIG_GENERIC,
             "Conflicting default route declarations for %s (%s, %s), first declared in %s but also in %s",
             (entry->family == AF_INET) ? "IPv4" : "IPv6",
             table_name,
@@ -598,7 +603,7 @@ check_defroute(struct _defroute_entry *candidate,
 }
 
 gboolean
-validate_default_route_consistency(const NetplanParser* npp, GHashTable *netdefs, GError ** error)
+validate_default_route_consistency(__unused const NetplanParser* npp, GHashTable *netdefs, GError ** error)
 {
     struct _defroute_entry candidate = {};
     GSList *defroutes = NULL;
@@ -647,4 +652,39 @@ validate_default_route_consistency(const NetplanParser* npp, GHashTable *netdefs
     }
     g_slist_free_full(defroutes, g_free);
     return ret;
+}
+
+gboolean
+validate_veth_pair(__unused const NetplanState* np_state, const NetplanNetDefinition* netdef, GError** error)
+{
+
+    NetplanNetDefinition* veth_peer = netdef->veth_peer_link;
+
+    /* If the veth's peer type is the placeholder, it wasn't defined yet so it's not a non-veth device */
+    if (veth_peer && veth_peer->type != NETPLAN_DEF_TYPE_NM_PLACEHOLDER_) {
+        if (veth_peer->type != NETPLAN_DEF_TYPE_VETH) {
+            g_set_error(error, NETPLAN_VALIDATION_ERROR, NETPLAN_ERROR_CONFIG_GENERIC,
+                        "%s: virtual-ethernet peer '%s' is not a virtual-ethernet interface\n", netdef->id, veth_peer->id);
+            return FALSE;
+        }
+
+        /* If the veth's peer has a peer link and its type is the placeholder, it's because it's not
+         * referring to the correct interface as its peer.
+         * Example: A.peer = B, B.peer = C and C is a placeholder.
+         */
+        if (veth_peer->veth_peer_link && veth_peer->veth_peer_link->type == NETPLAN_DEF_TYPE_NM_PLACEHOLDER_) {
+            g_set_error(error, NETPLAN_VALIDATION_ERROR, NETPLAN_ERROR_CONFIG_GENERIC,
+                        "%s: virtual-ethernet peer '%s' does not have a peer itself\n", netdef->id, veth_peer->id);
+            return FALSE;
+        }
+
+        if (veth_peer->veth_peer_link && veth_peer->veth_peer_link != netdef) {
+            g_set_error(error, NETPLAN_VALIDATION_ERROR, NETPLAN_ERROR_CONFIG_GENERIC,
+                        "%s: virtual-ethernet peer '%s' is another virtual-ethernet's (%s) peer already\n",
+                        netdef->id, veth_peer->id, veth_peer->veth_peer_link->id);
+            return FALSE;
+        }
+    }
+
+    return TRUE;
 }

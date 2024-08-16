@@ -1,0 +1,5 @@
+lib/netplan/*
+lib/systemd/system-generators/netplan
+usr/libexec/netplan/generate
+usr/share/man/man5/*
+usr/share/doc/*

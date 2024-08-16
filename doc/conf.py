@@ -27,9 +27,31 @@ author = 'Netplan team'
 # Add any Sphinx extension module names here, as strings. They can be
 # extensions coming with Sphinx (named 'sphinx.ext.*') or your custom
 # ones.
-extensions = ['sphinx_design', 'myst_parser', 'sphinx_copybutton']
+extensions = ['sphinx_design', 'myst_parser', 'sphinx_copybutton', 'sphinxcontrib.spelling', 'breathe']
 myst_enable_extensions = ["colon_fence"]
 smartquotes_action = 'qe'
+
+# Doxygen
+# https://breathe.readthedocs.io/en/latest/directives.html
+# breathe_projects = {"Netplan": "../doxyxml/"}
+breathe_projects_source = {"auto-apidoc": ("../", [
+    "include/netplan.h",
+    "include/parse-nm.h",
+    "include/parse.h",
+    "include/types.h",
+    "include/util.h",
+    "src/error.c",
+    "src/names.c",
+    "src/netplan.c",
+    "src/parse-nm.c",
+    "src/parse.c",
+    "src/types.c",
+    "src/util.c",
+    "src/validation.c",
+    ])}
+# breathe_doxygen_config_options =
+# breathe_doxygen_aliases =
+breathe_default_project = "auto-apidoc"
 
 # Add any paths that contain templates here, relative to this directory.
 templates_path = ['_templates']
@@ -57,3 +79,9 @@ html_logo = 'netplan.svg'
 
 # -- Options for MyST --------------------------------------------------------
 myst_title_to_header = True
+suppress_warnings = ['myst.xref_missing']
+
+# Spelling
+spelling_lang = 'en_US'
+tokenizer_lang = 'en_US'
+spelling_show_suggestions = True

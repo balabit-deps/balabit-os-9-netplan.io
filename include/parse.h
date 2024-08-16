@@ -15,6 +15,10 @@
  * along with this program.  If not, see <http://www.gnu.org/licenses/>.
  */
 
+/*! \file parse.h
+ *  \brief Netplan YAML parsing and validation.
+ */
+
 #pragma once
 #include <glib.h>
 #include "types.h"
@@ -39,6 +43,9 @@ NETPLAN_PUBLIC gboolean
 netplan_parser_load_yaml_from_fd(NetplanParser* npp, int input_fd, NetplanError** error);
 
 NETPLAN_PUBLIC gboolean
+netplan_parser_load_yaml_hierarchy(NetplanParser* npp, const char* rootdir, NetplanError** error);
+
+NETPLAN_PUBLIC gboolean
 netplan_parser_load_nullable_fields(NetplanParser* npp, int input_fd, NetplanError** error);
 
 NETPLAN_PUBLIC gboolean
@@ -51,7 +58,7 @@ netplan_state_import_parser_results(NetplanState* np_state, NetplanParser* npp, 
  * <constraint> only. */
 NETPLAN_PUBLIC gboolean
 netplan_parser_load_nullable_overrides(
-    NetplanParser* npp, int input_fd, const char* constraint, GError** error);
+    NetplanParser* npp, int input_fd, const char* constraint, NetplanError** error);
 
 /********** Old API below this ***********/
 

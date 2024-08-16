@@ -1,0 +1,39 @@
+From: =?utf-8?q?Lukas_M=C3=A4rdian?= <slyon@ubuntu.com>
+Date: Wed, 23 Aug 2023 17:37:11 +0200
+Subject: Revert "ovs: don't allow peers with the same name"
+
+This reverts commit 4f1a2936664e851b612b88d6e2d44eaa09c3be8d.
+
+To avoid additional stricter parsing validation in stable series.
+---
+ src/parse.c                 | 3 ---
+ tests/generator/test_ovs.py | 9 ---------
+ 2 files changed, 12 deletions(-)
+
+--- a/src/parse.c
++++ b/src/parse.c
+@@ -3058,9 +3058,6 @@
+         peer = yaml_document_get_node(&npp->doc, *(item+1));
+         assert_type(npp, peer, YAML_SCALAR_NODE);
+ 
+-        if (!g_strcmp0(scalar(port), scalar(peer)))
+-            return yaml_error(npp, peer, error, "Open vSwitch patch ports must be of different name");
+-
+         /* Create port 1 netdef */
+         component1 = npp->parsed_defs ? g_hash_table_lookup(npp->parsed_defs, scalar(port)) : NULL;
+         if (!component1) {
+--- a/tests/generator/test_ovs.py
++++ b/tests/generator/test_ovs.py
+@@ -1095,12 +1095,3 @@
+ ExecStart=/usr/bin/ovs-vsctl set Bridge br123 external-ids:netplan/global/set-controller=tcp:127.0.0.1:6653\n\
+ ')},
+                          'cleanup.service': OVS_CLEANUP % {'iface': 'cleanup'}})
+-
+-    def test_both_ports_with_same_name(self):
+-        err = self.generate('''network:
+-    version: 2
+-    openvswitch:
+-      ports:
+-        - [portname, portname]
+-''', expect_fail=True)
+-        self.assertIn('Open vSwitch patch ports must be of different name', err)

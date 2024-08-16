@@ -1,0 +1,18 @@
+From: =?utf-8?q?Lukas_M=C3=A4rdian?= <slyon@ubuntu.com>
+Date: Wed, 23 Aug 2023 17:39:15 +0200
+Subject: parse: add comment about OpenFlow16 deprecation
+
+---
+ src/parse.c | 1 +
+ 1 file changed, 1 insertion(+)
+
+--- a/src/parse.c
++++ b/src/parse.c
+@@ -2639,6 +2639,7 @@
+         yaml_node_t *entry = yaml_document_get_node(&npp->doc, *iter);
+         assert_type(npp, entry, YAML_SCALAR_NODE);
+ 
++        // This got abandoned by the ONF as of OVS v2.12 so the warning can be SRUed into Jammy LTS
+         if (!g_strcmp0(scalar(entry), deprecated[0])) {
+             g_warning("Open vSwitch: Ignoring deprecated protocol: %s", scalar(entry));
+             continue;

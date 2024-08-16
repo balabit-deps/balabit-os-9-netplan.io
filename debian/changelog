@@ -1,8 +1,172 @@
+netplan.io (0.107.1-3ubuntu0.22.04.1) jammy; urgency=medium
+
+  * Backport netplan.io 0.107.1-3 to 22.04 (LP: #2058031):
+    - Support for "dummy" (`dummy-devices`) interfaces (LP: 1774203) (!361)
+    - Support for "veth" (`virtual-ethernets`) interfaces (!368)
+    - Add Python bindings for libnetplan (!385)
+    - netplan: Handle command exceptions (!334)
+    - WPA3 (personal) support (LP: 2023238) (!369)
+    - Add all the commands to the bash completion file (LP: 1749869) (!326)
+    - New submodule for state manipulation (!379)
+    - commands/status: show routes from all routing tables (!390)
+    - cli:status: Make rich pretty printing optional (!388)
+    - libnetplan: expose dhcp4 and dhcp6 properties (!394)
+    - Expose macaddress and DNS configuration from the netdef (!395)
+    - libnetplan: expose the routes list in the netdef (!397)
+    - NetworkManager: Wireguard private key flag support (!371)
+    - Add a netplan_parser_load_keyfile() Python binding (!351)
+    - keyfile parser: add support for all tunnel types (LP: 2016473) (!360)
+    - parse-nm:wg: add support for reading the listen-port property (!372)
+    - parse-nm: add support for VRF devices (!398)
+    - Vlan keyfile parser support (!370)
+    - Netplan docs rework (!333 & !337)
+    - docs: Add a short netplan-everywhere howto (!325)
+    - doc: make us of sphinx copybutton plugin (!354)
+    - doc: Add Ubuntu Code of Conduct 2.0 (!355)
+    - doc: Explanation about 00-network-manager-all.yaml (!378)
+    - wifi: add support for WPA3-Enterprise (LP: 2029876) (!402)
+    - wifi: support WPA2 and WPA3 Personal simultaneously (!404)
+    - added mii-monitor-interval example (!411)
+    - docs: Add "Contribute Documentation" how-to
+    - auth: add support for LEAP and EAP-PWD (!415)
+    - tests: Add autopkgtest for (LP: 1959570) (!419)
+    - wifi: make it possible to have a psk and an eap password simultaneously
+      (!416)
+    - doc: Set-up some basic Doxygen project (!423)
+    - doc: Make Sphinx to handle autodoxygen project, using breathe (!423)
+    - doc: create libnetplan apidoc structure (!423)
+    - inc: Start documenting public API (!423)
+    - doc: Update 'Netplan everywhere' for 23.10 (!418)
+    SECURITY UPDATE: weak permissions on secret files, command injection
+    - d/p/lp2065738/0014-libnetplan-use-more-restrictive-file-permissions.patch:
+      Use more restrictive file permissions to prevent unprivileged users to
+      read sensitive data from back end files (LP: 2065738, 1987842)
+    - CVE-2022-4968
+    - d/p/lp2066258/0015-libnetplan-escape-control-characters.patch:
+      Escape control characters in the parser and double quotes in backend
+      files.
+    - d/p/lp2066258/0016-backends-escape-file-paths.patch:
+      Escape special characters in file paths.
+    - d/p/lp2066258/0017-backends-escape-semicolons-in-service-units.patch:
+      Escape isolated semicolons in systemd service units. (LP: 2066258)
+    - debian/netplan-generator.postinst: Add a postinst maintainer script to
+      call the generator. It's needed so the file permissions fixes will be
+      applied automatically.
+    Bug fixes:
+    - Fix FTBFS on Fedora and refresh RPM packaging (!323)
+    - parser: validate lacp-rate properly (LP: 1745648) (!324)
+    - use meson-make-symlink.sh helper instead of install_symlink() (!327)
+    - netplan: cli: fix typo from 'unkown' to 'unknown' (!328)
+    - Handle duplication during parser second pass (LP: 2007682) (!329)
+    - parse:ovs: Ignore deprecated OpenFlow1.6 protocol (LP: 1963735) (!332)
+    - dbus: Build the copy path correctly (!331)
+    - tests: add new spread based snapd integration test (!330)
+    - Use controlled execution environment, to avoid failure if PATH is unset
+      (LP: 1959570) (!336)
+    - Some refactoring (!338)
+    - netplan: adjust the maximum buffer size to 1MB (!340)
+    - parse: use "--" with systemd-escape (!347)
+    - docs: fix bridge parameters types and add examples (!346)
+    - vrfs: skip policies parsing if list is NULL (LP: 2016427) (!341)
+    - networkd: plug a memory leak (!344)
+    - libnetplan: don't try to read from a NULL file (!342)
+    - nm: return if write_routes() fails (!345)
+    - parse: plug a memory leak (!348)
+    - parse: set the backend on nm-devices to NM (!349)
+    - parse: don't point to the wrong node on validation (!343)
+    - rtd: set the OS and Python versions explicitly (!357)
+    - Fix 8021x eap method parsing (LP: 2016625) (!358)
+    - CI: update canonical/setup-lxd to v0.1.1 (!359)
+    - CI: fix dch after adding the new 0.106.1 tag (!364)
+    - Provide frequency to wpa_supplicant in adhoc mode (LP: 2020754) (!363)
+    - Improve the coverage of the memory leak tests (!365)
+    - Fix keyfile parsing of wireguard config (!366)
+    - routes: fix metric rendering (LP: 2023681) (!367)
+    - CI: add DebCI integration test (!362)
+    - CI: initial NetworkManager autopkgtests (!374)
+    - parse-nm: handle cloned-mac-address special cases (LP: 2026230) (!376)
+    - Improve autopkgtest stability with systemd 253 & iproute 6.4 (!377)
+    - Fixes for minor issues (!380)
+    - tests:integration: Adopt for systemd v254 (Closes: #1041310) (!381)
+    - parse: Downgrade NM passthrough warning to debug (!384)
+    - Don't drop files with just global values (LP: 2027584) (!382)
+    - Fixing Coverity issues (!383)
+    - CLI: Refactoring to avoid namespace clash with public bindings (!387)
+    - tests: fix test coverage report with newer python-coverage (!389)
+    - github: add a scheduled action to run Coverity (!391)
+    - github: only run the coverity workflow on our repository (!392)
+    - Addressing a few issues found (!393)
+    - Wireguard fixes (!352)
+    - Fix a memory leak, an assert and an error message (!350)
+    - ovs: don't allow peers with the same name (!353)
+    - CI: make use of the canonical/setup-lxd action (!356)
+    - test:ovs: Avoid NetworkManager taking contol, breaking a test
+    - parse: allow COMMON_LINK_HANDLERS for VRFs (!401)
+    - util: don't return a placeholder netdef in the iterator (!406)
+    - tunnels/validation: do not error out if "local" is not defined (!407)
+    - tests: add some integration tests without the local address (!407)
+    - wireguard: ignore empty endpoints (LP: 2038811) (!414)
+    - parse: improve the parsing of access-points (LP: 1809994) (!413)
+    - wifi: replace the previously defined AP with the new one (!413)
+    - doc: spelling check improvements (!417)
+    - Fix permissions on folder '/run/NetworkManager/' (!422)
+    - cli:try: avoid linting error for type hints (Closes: #1058524) (!422)
+    - nm-parse: always read the PSK into the new psk variable (!416)
+    - networkd: fix formatting (!424)
+    - networkd: replace deprecated CriticalConnection= by KeepConfiguration=
+      (!424)
+    - networkd: move KeepConfiguration= into [Network] section
+    - apply: bring "lo" back up if it's managed by NM (!408)
+    - apply: don't assume the NM loopback connection is called "lo" (!408)
+    Packaging restructuring:
+    - Split netplan-generator into separate package to make the Python
+      dependency optional.
+    - Split python3-netplan bindings into a separate package
+  * Add patches for bug fixes from netplan.io 1.0-1 and 1.0.1-1:
+    - debian/patches/lp2041727:
+      Check if ovsdb-server.service is active before displaying warning
+      (LP: 2041727) (!421)
+    - d/p/0004-tests-assert-generated-.service-files-in-assert_srio.patch,
+      d/p/0005-tests-sriov-test-if-the-generated-netplan-rebind-ser.patch,
+      d/p/0006-sriov-don-t-generate-duplicate-entries-in-the-rebind.patch:
+      Don't generate duplicate entries in the netplan-sriov-rebind.service
+      (!437)
+    - d/p/0017-emitter-allow-unicode-characters-in-the-emitter.patch.
+      Allow non-ascii characters in the YAML emitter (LP: 2071652) (!485).
+    - d/p/0018-parse-do-not-escape-all-non-ascii-bytes.patch.
+      Don't escape all non-ascii bytes (!486).
+  * Drop patches not required for 22.04:
+    - debian/patches/python-limited-stable-api.patch
+    - d/p/sru-compat/0013-Keep-old-file-permission-for-backwards-compatibility.patch.
+      From now on we want libnetplan to create files with tight permissions.
+  * Add patches for SRU backwards compatibility:
+    - 0014-Demote-lacp-rate-validation-error-to-warning-for-bac.patch:
+      Convert the error to a warning in a new validation for the option
+      'lacp-rate' to prevent breaking existing setups
+  * debian/control:
+    - Drop python3-rich dependency to Suggests
+    - Drop build dependency on systemd-dev
+  * debian/netplan.io.preinst:
+    - This preinst script is intended to cleanup the .pyc files from
+      share/netplan/netplan. This directory is supposed to be removed after
+      the upgrade from netplan.io 0.106.1 to 0.107.1, as the Python code
+      was moved to it's own python3-netplan package, but it's left behind
+      due to Python cached files.
+  * Drop changes related to usr-merge and not required for 22.04
+    - debian/netplan-generator.install
+    - debian/netplan-generator.dirs
+    - debian/netplan-generator.postinst
+    - debian/netplan-generator.preinst
+  * d/netplan-generator.lintian-overrides, d/netplan.io.lintian-overrides:
+    - Drop overrides file. It wasn't really silencing any lintian warnings.
+
+ -- Danilo Egea Gondolfo <danilo.egea.gondolfo@canonical.com>  Fri, 16 Aug 2024 17:59:32 +0100
+
 netplan.io (0.106.1-7ubuntu0.22.04.4) jammy-security; urgency=medium
 
   * SECURITY REGRESSION: failure on systems without dbus
     - debian/netplan.io.postinst: Don't call the generator if no networkd
-      configuration file exists. (LP: #2071333) 
+      configuration file exists. (LP: #2071333)
 
  -- Sudhakar Verma <sudhakar.verma@canonical.com>  Fri, 28 Jun 2024 22:42:13 +0530
 
@@ -22,7 +186,7 @@ netplan.io (0.106.1-7ubuntu0.22.04.3) jammy-security; urgency=medium
       Escape isolated semicolons in systemd service units (LP: #2066258)
   * debian/netplan.io.postinst: Add a postinst maintainer script to call the
     generator. It's needed so the file permissions fixes will be applied
-    automatically, thanks to danilogondolfo 
+    automatically, thanks to danilogondolfo
 
  -- Sudhakar Verma <sudhakar.verma@canonical.com>  Mon, 24 Jun 2024 23:20:42 +0530
 

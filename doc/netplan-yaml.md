@@ -12,9 +12,11 @@ network:
   renderer: STRING
   bonds: MAPPING
   bridges: MAPPING
+  dummy-devices: MAPPING
   ethernets: MAPPING
   modems: MAPPING
   tunnels: MAPPING
+  virtual-ethernets: MAPPING
   vlans: MAPPING
   vrfs: MAPPING
   wifis: MAPPING
@@ -37,6 +39,10 @@ network:
 
   > Creates and configures bridge devices.
 
+- [**dummy-devices**](#properties-for-device-type-dummy-devices) (mapping) – since **0.107**
+
+  > Creates and configures virtual devices.
+
 - [**ethernets**](#properties-for-device-type-ethernets) (mapping)
 
   > Configures physical Ethernet interfaces.
@@ -48,6 +54,10 @@ network:
 - [**tunnels**](#properties-for-device-type-tunnels) (mapping)
 
   > Creates and configures different types of virtual tunnels.
+
+- [**virtual-ethernets**](#properties-for-device-type-virtual-ethernets) (mapping) – since **0.107**
+
+  > Creates and configures Virtual Ethernet (veth) devices.
 
 - [**vlans**](#properties-for-device-type-vlans) (mapping)
 
@@ -840,8 +850,9 @@ interfaces, as well as individual wifi networks, by means of the `auth` block.
 
     > The supported key management modes are `none` (no key management);
     > `psk` (WPA with pre-shared key, common for home wifi); `eap` (WPA
-    > with EAP, common for enterprise wifi); and `802.1x` (used primarily
-    > for wired Ethernet connections).
+    > with EAP, common for enterprise wifi); `eap-sha256` (used with WPA3-Enterprise);
+    > `eap-suite-b-192` (used with WPA3-Enterprise); `sae` (used by WPA3);
+    > and `802.1x` (used primarily for wired Ethernet connections).
 
   - **password** (scalar)
 
@@ -853,7 +864,8 @@ interfaces, as well as individual wifi networks, by means of the `auth` block.
   - **method** (scalar)
 
      > The EAP method to use. The supported EAP methods are `tls` (TLS),
-    > `peap` (Protected EAP), and `ttls` (Tunneled TLS).
+     > `peap` (Protected EAP), `leap` (Lightweight EAP), `pwd` (EAP Password)
+     > and `ttls` (Tunneled TLS).
 
   - **identity** (scalar)
 
@@ -1317,6 +1329,31 @@ The specific settings for bridges are defined below.
     > used.
 
 
+## Properties for device type `dummy-devices:`
+
+**Status**: Optional.
+
+**Purpose**: Use the `dummy-devices` key to create virtual interfaces.
+
+**Structure**: The key consists of a mapping of interface names.
+Dummy devices are virtual devices that can be used to route packets to
+without actually transmitting them.
+
+```yaml
+network:
+  dummy-devices:
+    dm0:
+      addresses:
+        - 192.168.0.123/24
+      ...
+```
+
+When applied, a virtual interface called `dm0` will be created in the system.
+
+See the ["Properties for all device types"](#properties-for-all-device-types) section for the list of properties that can be
+used with this type of interface.
+
+
 ## Properties for device type `bonds:`
 
 **Status**: Optional.
@@ -1564,9 +1601,8 @@ The specific settings for tunnels are defined below.
 - **mode** (scalar)
 
   > Defines the tunnel mode. Valid options are `sit`, `gre`, `ip6gre`,
-  > `ipip`, `ipip6`, `ip6ip6`, `vti`, `vti6`, `wireguard` and `vxlan`.
-  > Additionally, the `networkd` backend also supports `gretap` and
-  > `ip6gretap` modes.
+  > `ipip`, `ipip6`, `ip6ip6`, `vti`, `vti6`, `wireguard`, `vxlan`,
+  > `gretap` and `ip6gretap` modes.
   > In addition, the `NetworkManager` backend supports `isatap` tunnels.
 
 - **local** (scalar)
@@ -1613,6 +1649,39 @@ The specific settings for tunnels are defined below.
     > `systemd-networkd` backend (v242+) is used, this can also be an
     > absolute path to a file containing the private key.
 
+  - **private-key-flags** (sequence of scalars) – since **0.107**
+
+    > Private key flags used by Network Manager. Possible values are:
+    > `agent-owned`, `not-saved` and `not-required`.
+    >
+    > `agent-owned`: a user-session secret agent is responsible for
+    > providing and storing this secret.
+    >
+    > `not-saved`: this secret should not be saved but should be
+    > requested from the user each time it is required.
+    >
+    > `not-required`: this flag hints that the secret is not required
+    > and should not be requested from the user.
+
+    Example:
+
+    ```yaml
+    network:
+      renderer: NetworkManager
+      tunnels:
+        wg0:
+          mode: wireguard
+          port: 5182
+          key:
+            private-key-flags:
+              - agent-owned
+          peers:
+            - keys:
+                public: rlbInAj0qV69CysWPQY7KEBnKxpYCpaWqOs/dLevdWc=
+              allowed-ips: [0.0.0.0/0, "2001:fe:ad:de:ad:be:ef:1/24"]
+              keepalive: 23
+              endpoint: 1.2.3.4:5
+      ```
 - **keys** (scalar or mapping)
 
   > Alternate name for the `key` field. See above.
@@ -1821,6 +1890,63 @@ VXLAN specific keys:
 
   > Allows setting the IPv4 Do not Fragment (DF) bit in outgoing packets.
   > Takes a boolean value. When unset, the kernel's default will be used.
+
+## Properties for device type `virtual-ethernets:`
+
+**Status**: Optional.
+
+**Purpose**: Use the `virtual-ethernets` key to create virtual Ethernet interfaces.
+
+**Structure**: The key consists of a mapping of virtual-ethernet interface names. Each
+`virtual-ethernet` requires a `peer`. In order to have a fully working `virtual-ethernet` pair,
+both devices must be defined, i.e., only setting the `peer` key with the peer
+name is not enough, the peer interface must also be defined and set the first one
+as its peer.
+The general configuration structure for Virtual Ethernets is shown below.
+
+```yaml
+network:
+  virtual-ethernets:
+    veth0:
+      peer: veth1
+    veth1:
+      peer: veth0
+```
+
+When applied, two virtual interfaces called `veth0` and `veth1` will be created in the system.
+
+Virtual Ethernets acts as tunnels forwarding traffic from one interface to the other.
+They can be used to connect two separate virtual networks such as network namespaces and
+bridges. It's not possible to move `virtual-ethernets` to different namespaces through Netplan at the
+present moment.
+
+The specific settings for virtual-ethernets are defined below.
+
+- **peer** (scalar)
+
+  > Defines the virtual-ethernet peer. The peer interface must also be a virtual-ethernet device.
+
+Below is a complete example that uses a pair of virtual Ethernet devices to create a link between two
+bridges:
+
+```yaml
+network:
+  version: 2
+  renderer: networkd
+  virtual-ethernets:
+    veth0-peer1:
+      peer: veth0-peer2
+    veth0-peer2:
+      peer: veth0-peer1
+
+  bridges:
+    br0:
+      interfaces:
+        - veth0-peer1
+    br1:
+      interfaces:
+        - veth0-peer2
+```
 
 ## Properties for device type `vlans:`
 
