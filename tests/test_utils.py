@@ -22,11 +22,11 @@ import unittest
 import tempfile
 import glob
 import netifaces
+import netplan
 
 from contextlib import redirect_stdout
-from netplan.cli.core import Netplan
-import netplan.cli.utils as utils
-import netplan.libnetplan as libnetplan
+from netplan_cli.cli.core import Netplan
+import netplan_cli.cli.utils as utils
 from unittest.mock import patch
 
 
@@ -104,7 +104,9 @@ def call_cli(args):
     f = io.StringIO()
     try:
         with redirect_stdout(f):
-            Netplan().main()
+            netplan = Netplan()
+            netplan.parse_args()
+            netplan.run_command()
             return f.getvalue()
     finally:
         sys.argv = old_sys_argv
@@ -123,9 +125,9 @@ class TestUtils(unittest.TestCase):
     def load_conf(self, conf_txt):
         with open(self.default_conf, 'w') as f:
             f.write(conf_txt)
-        parser = libnetplan.Parser()
+        parser = netplan.Parser()
         parser.load_yaml_hierarchy(rootdir=self.workdir.name)
-        state = libnetplan.State()
+        state = netplan.State()
         state.import_parser_results(parser)
         return state
 
@@ -168,8 +170,8 @@ class TestUtils(unittest.TestCase):
         self.assertTrue(len(ifaces) == 4)
 
     # For the matching tests, we mock out the functions querying extra data
-    @patch('netplan.cli.utils.get_interface_driver_name')
-    @patch('netplan.cli.utils.get_interface_macaddress')
+    @patch('netplan_cli.cli.utils.get_interface_driver_name')
+    @patch('netplan_cli.cli.utils.get_interface_macaddress')
     def test_find_matching_iface_too_many(self, gim, gidn):
         gidn.side_effect = lambda x: 'foo' if x == 'ens4' else 'bar'
         gim.side_effect = lambda x: '00:01:02:03:04:05' if x == 'eth1' else '00:00:00:00:00:00'
@@ -183,8 +185,8 @@ class TestUtils(unittest.TestCase):
         iface = utils.find_matching_iface(DEVICES, state['netplan-id'])
         self.assertEqual(iface, None)
 
-    @patch('netplan.cli.utils.get_interface_driver_name')
-    @patch('netplan.cli.utils.get_interface_macaddress')
+    @patch('netplan_cli.cli.utils.get_interface_driver_name')
+    @patch('netplan_cli.cli.utils.get_interface_macaddress')
     def test_find_matching_iface(self, gim, gidn):
         # we mock-out get_interface_macaddress to return useful values for the test
         gidn.side_effect = lambda x: 'foo' if x == 'ens4' else 'bar'
@@ -200,8 +202,8 @@ class TestUtils(unittest.TestCase):
         iface = utils.find_matching_iface(DEVICES, state['netplan-id'])
         self.assertEqual(iface, 'eth1')
 
-    @patch('netplan.cli.utils.get_interface_driver_name')
-    @patch('netplan.cli.utils.get_interface_macaddress')
+    @patch('netplan_cli.cli.utils.get_interface_driver_name')
+    @patch('netplan_cli.cli.utils.get_interface_macaddress')
     def test_find_matching_iface_name_and_driver(self, gim, gidn):
         gidn.side_effect = lambda x: 'foo' if x == 'ens4' else 'bar'
         gim.side_effect = lambda x: '00:01:02:03:04:05' if x == 'eth1' else '00:00:00:00:00:00'
@@ -216,8 +218,8 @@ class TestUtils(unittest.TestCase):
         iface = utils.find_matching_iface(DEVICES, state['netplan-id'])
         self.assertEqual(iface, 'ens4')
 
-    @patch('netplan.cli.utils.get_interface_driver_name')
-    @patch('netplan.cli.utils.get_interface_macaddress')
+    @patch('netplan_cli.cli.utils.get_interface_driver_name')
+    @patch('netplan_cli.cli.utils.get_interface_macaddress')
     def test_find_matching_iface_name_and_drivers(self, gim, gidn):
         # we mock-out get_interface_driver_name to return useful values for the test
         gidn.side_effect = lambda x: 'foo' if x == 'ens4' else 'bar'
@@ -369,3 +371,15 @@ class TestUtils(unittest.TestCase):
         self.assertEqual(self.mock_cmd.calls(), [
             ['ip', 'addr', 'flush', 'eth42']
         ])
+
+    @patch('netplan_cli.cli.utils.nmcli_out')
+    def test_nm_get_connection_for_interface(self, nmcli):
+        nmcli.return_value = 'CONNECTION \nlo         \n'
+        out = utils.nm_get_connection_for_interface('lo')
+        self.assertEqual(out, 'lo')
+
+    @patch('netplan_cli.cli.utils.nmcli_out')
+    def test_nm_get_connection_for_interface_no_connection(self, nmcli):
+        nmcli.return_value = 'CONNECTION \n--         \n'
+        out = utils.nm_get_connection_for_interface('asd0')
+        self.assertEqual(out, '')

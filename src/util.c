@@ -163,6 +163,7 @@ netplan_util_create_yaml_patch(const char* conf_obj_path, const char* obj_payloa
         goto file_error; // LCOV_EXCL_LINE
 
     yaml_emitter_initialize(&emitter);
+    yaml_parser_initialize(&parser);
     yaml_emitter_set_output_file(&emitter, out_stream);
     yaml_stream_start_event_initialize(&event, YAML_UTF8_ENCODING);
     if (!yaml_emitter_emit(&emitter, &event))
@@ -178,11 +179,10 @@ netplan_util_create_yaml_patch(const char* conf_obj_path, const char* obj_payloa
     }
     g_strfreev(tokens);
 
-    yaml_parser_initialize(&parser);
     yaml_parser_set_input_string(&parser, (const unsigned char *)obj_payload, strlen(obj_payload));
     while (TRUE) {
         if (!yaml_parser_parse(&parser, &event)) {
-            g_set_error(error, G_MARKUP_ERROR, G_MARKUP_ERROR_INVALID_CONTENT, "Error parsing YAML: %s", parser.problem);
+            g_set_error(error, NETPLAN_FORMAT_ERROR, NETPLAN_ERROR_FORMAT_INVALID_YAML, "Error parsing YAML: %s", parser.problem);
             goto cleanup;
         }
         if (event.type == YAML_STREAM_END_EVENT || event.type == YAML_DOCUMENT_END_EVENT)
@@ -219,7 +219,7 @@ netplan_util_create_yaml_patch(const char* conf_obj_path, const char* obj_payloa
 
 // LCOV_EXCL_START
 err_path:
-    g_set_error(error, G_MARKUP_ERROR, G_MARKUP_ERROR_INVALID_CONTENT, "Error generating YAML: %s", emitter.problem);
+    g_set_error(error, NETPLAN_EMITTER_ERROR, NETPLAN_ERROR_YAML_EMITTER, "Error generating YAML: %s", emitter.problem);
     ret = FALSE;
 // LCOV_EXCL_STOP
 cleanup:
@@ -231,7 +231,7 @@ cleanup:
 
 // LCOV_EXCL_START
 file_error:
-    g_set_error(error, G_FILE_ERROR, errno, "Error when opening FD %d: %s", output_fd, g_strerror(errno));
+    g_set_error(error, NETPLAN_FILE_ERROR, errno, "Error when opening FD %d: %m", output_fd);
     if (out_dup >= 0)
         close(out_dup);
     return FALSE;
@@ -244,7 +244,7 @@ copy_yaml_subtree(yaml_parser_t *parser, yaml_emitter_t *emitter, GError** error
     int map_count = 0, seq_count = 0;
     do {
 		if (!yaml_parser_parse(parser, &event)) {
-            g_set_error(error, G_MARKUP_ERROR, G_MARKUP_ERROR_INVALID_CONTENT, "Error parsing YAML: %s", parser->problem);
+            g_set_error(error, NETPLAN_FORMAT_ERROR, NETPLAN_ERROR_FORMAT_INVALID_YAML, "Error parsing YAML: %s", parser->problem);
             return FALSE;
         }
 
@@ -266,7 +266,7 @@ copy_yaml_subtree(yaml_parser_t *parser, yaml_emitter_t *emitter, GError** error
         }
         if (emitter && !yaml_emitter_emit(emitter, &event)) {
             // LCOV_EXCL_START
-            g_set_error(error, G_MARKUP_ERROR, G_MARKUP_ERROR_INVALID_CONTENT, "Error emitting YAML: %s", emitter->problem);
+            g_set_error(error, NETPLAN_PARSER_ERROR, NETPLAN_ERROR_INVALID_YAML, "Error emitting YAML: %s", emitter->problem);
             return FALSE;
             // LCOV_EXCL_STOP
         }
@@ -288,7 +288,7 @@ emit_yaml_subtree(yaml_parser_t *parser, yaml_emitter_t *emitter, char** yaml_pa
     if (!yaml_parser_parse(parser, &event))
         goto parser_err_path; // LCOV_EXCL_LINE
     if (event.type != YAML_MAPPING_START_EVENT) {
-        g_set_error(error, G_MARKUP_ERROR, G_MARKUP_ERROR_INVALID_CONTENT, "Unexpected YAML structure found");
+        g_set_error(error, NETPLAN_FORMAT_ERROR, NETPLAN_ERROR_FORMAT_INVALID_YAML, "Unexpected YAML structure found");
         return FALSE;
     }
     while (TRUE) {
@@ -309,12 +309,12 @@ emit_yaml_subtree(yaml_parser_t *parser, yaml_emitter_t *emitter, char** yaml_pa
     return TRUE;
 
 parser_err_path:
-    g_set_error(error, G_MARKUP_ERROR, G_MARKUP_ERROR_INVALID_CONTENT, "Error parsing YAML: %s", parser->problem);
+    g_set_error(error, NETPLAN_FORMAT_ERROR, NETPLAN_ERROR_FORMAT_INVALID_YAML, "Error parsing YAML: %s", parser->problem);
     return FALSE;
 }
 
-NETPLAN_INTERNAL gboolean
-netplan_util_dump_yaml_subtree(const char* prefix, int input_fd, int output_fd, GError** error) {
+gboolean
+netplan_util_dump_yaml_subtree(const char* prefix, int input_fd, int output_fd, NetplanError** error) {
     gboolean ret = TRUE;
     char **yaml_path = NULL;
 	yaml_emitter_t emitter;
@@ -373,23 +373,29 @@ netplan_util_dump_yaml_subtree(const char* prefix, int input_fd, int output_fd, 
     goto cleanup;
 
 file_error:
-        g_set_error(error, G_FILE_ERROR, errno, "%s", g_strerror(errno));
+        g_set_error(error, NETPLAN_FILE_ERROR, errno, "%m");
         ret = FALSE;
         goto cleanup;
 // LCOV_EXCL_START
 parser_err_path:
-    g_set_error(error, G_MARKUP_ERROR, G_MARKUP_ERROR_INVALID_CONTENT, "Error parsing YAML: %s", parser.problem);
+    g_set_error(error, NETPLAN_FORMAT_ERROR, NETPLAN_ERROR_FORMAT_INVALID_YAML, "Error parsing YAML: %s", parser.problem);
     ret = FALSE;
     goto cleanup;
 err_path:
-    g_set_error(error, G_MARKUP_ERROR, G_MARKUP_ERROR_INVALID_CONTENT, "Error generating YAML: %s", emitter.problem);
+    g_set_error(error, NETPLAN_EMITTER_ERROR, NETPLAN_ERROR_YAML_EMITTER, "Error generating YAML: %s", emitter.problem);
     ret = FALSE;
 // LCOV_EXCL_STOP
 cleanup:
     if (input)
         fclose(input);
+    else if (in_dup >= 0)
+        close(in_dup);
+
     if (output)
         fclose(output);
+    else if (out_dup >= 0)
+        close(out_dup);
+
     if (yaml_path)
         g_strfreev(yaml_path);
     return ret;
@@ -709,13 +715,164 @@ get_unspecified_address(int ip_family)
     return (ip_family == AF_INET) ? "0.0.0.0" : "::";
 }
 
+struct address_iter*
+_netplan_netdef_new_address_iter(NetplanNetDefinition* netdef)
+{
+    struct address_iter* it = g_malloc0(sizeof(struct address_iter));
+    it->ip4_index = 0;
+    it->ip6_index = 0;
+    it->address_options_index = 0;
+    it->netdef = netdef;
+    it->last_address = NULL;
+
+    return it;
+}
+
+/*
+ * The netdef address iterator produces NetplanAddressOptions
+ * for all the addresses stored in ip4_address, ip6_address and
+ * address_options (in this order).
+ *
+ * The current value produced by the iterator is saved in it->last_address
+ * and the previous one is released. The idea is to not leave to the caller
+ * the responsibility of releasing each value. The very last value
+ * will be released either when the iterator is destroyed or when there is
+ * nothing else to be produced and the iterator was called one last time.
+ */
+NetplanAddressOptions*
+_netplan_address_iter_next(struct address_iter* it)
+{
+    NetplanAddressOptions* options = NULL;
+
+    if (it->last_address) {
+        free_address_options(it->last_address);
+        it->last_address = NULL;
+    }
+
+    if (it->netdef->ip4_addresses && it->ip4_index < it->netdef->ip4_addresses->len) {
+        options = g_malloc0(sizeof(NetplanAddressOptions));
+        options->address = g_strdup(g_array_index(it->netdef->ip4_addresses, char*, it->ip4_index++));
+        it->last_address = options;
+        return options;
+    }
+
+    if (it->netdef->ip6_addresses && it->ip6_index < it->netdef->ip6_addresses->len) {
+        options = g_malloc0(sizeof(NetplanAddressOptions));
+        options->address = g_strdup(g_array_index(it->netdef->ip6_addresses, char*, it->ip6_index++));
+        it->last_address = options;
+        return options;
+    }
+
+    if (it->netdef->address_options && it->address_options_index < it->netdef->address_options->len) {
+        options = g_malloc0(sizeof(NetplanAddressOptions));
+        NetplanAddressOptions* netdef_options = g_array_index(it->netdef->address_options, NetplanAddressOptions*, it->address_options_index++);
+        options->address = g_strdup(netdef_options->address);
+        options->lifetime = g_strdup(netdef_options->lifetime);
+        options->label = g_strdup(netdef_options->label);
+        it->last_address = options;
+        return options;
+    }
+
+    return options;
+}
+
+void
+_netplan_address_iter_free(struct address_iter* it)
+{
+    if (it->last_address)
+        free_address_options(it->last_address);
+    g_free(it);
+}
+
+struct nameserver_iter*
+_netplan_netdef_new_nameserver_iter(NetplanNetDefinition* netdef)
+{
+    struct nameserver_iter* it = g_malloc0(sizeof(struct nameserver_iter));
+    it->ip4_index = 0;
+    it->ip6_index = 0;
+    it->netdef = netdef;
+
+    return it;
+}
+
+char*
+_netplan_nameserver_iter_next(struct nameserver_iter* it)
+{
+    if (it->netdef->ip4_nameservers && it->ip4_index < it->netdef->ip4_nameservers->len) {
+        return g_array_index(it->netdef->ip4_nameservers, char*, it->ip4_index++);
+    }
+
+    if (it->netdef->ip6_nameservers && it->ip6_index < it->netdef->ip6_nameservers->len) {
+        return g_array_index(it->netdef->ip6_nameservers, char*, it->ip6_index++);
+    }
+
+    return NULL;
+}
+
+void
+_netplan_nameserver_iter_free(struct nameserver_iter* it)
+{
+    g_free(it);
+}
+
+struct nameserver_iter*
+_netplan_netdef_new_search_domain_iter(NetplanNetDefinition* netdef)
+{
+    struct nameserver_iter* it = g_malloc0(sizeof(struct nameserver_iter));
+    it->search_index = 0;
+    it->netdef = netdef;
+
+    return it;
+}
+
+char*
+_netplan_search_domain_iter_next(struct nameserver_iter* it)
+{
+    if (it->netdef->search_domains && it->search_index < it->netdef->search_domains->len) {
+        return g_array_index(it->netdef->search_domains, char*, it->search_index++);
+    }
+
+    return NULL;
+}
+
+void
+_netplan_search_domain_iter_free(struct nameserver_iter* it)
+{
+    g_free(it);
+}
+
+struct route_iter*
+_netplan_netdef_new_route_iter(NetplanNetDefinition* netdef)
+{
+    struct route_iter* it = g_malloc0(sizeof(struct route_iter));
+    it->route_index = 0;
+    it->netdef = netdef;
+
+    return it;
+}
+
+NetplanIPRoute*
+_netplan_route_iter_next(struct route_iter* it)
+{
+    if (it->netdef->routes && it->route_index < it->netdef->routes->len)
+        return g_array_index(it->netdef->routes, NetplanIPRoute*, it->route_index++);
+
+    return NULL;
+}
+
+void
+_netplan_route_iter_free(struct route_iter* it)
+{
+    g_free(it);
+}
+
 struct netdef_pertype_iter {
     NetplanDefType type;
     GHashTableIter iter;
     NetplanState* np_state;
 };
 
-NETPLAN_INTERNAL struct netdef_pertype_iter*
+struct netdef_pertype_iter*
 _netplan_state_new_netdef_pertype_iter(NetplanState* np_state, const char* def_type)
 {
     NetplanDefType type = def_type ? netplan_def_type_from_name(def_type) : NETPLAN_DEF_TYPE_NONE;
@@ -728,7 +885,7 @@ _netplan_state_new_netdef_pertype_iter(NetplanState* np_state, const char* def_t
 }
 
 
-NETPLAN_INTERNAL NetplanNetDefinition*
+NetplanNetDefinition*
 _netplan_netdef_pertype_iter_next(struct netdef_pertype_iter* it)
 {
     gpointer key, value;
@@ -738,13 +895,15 @@ _netplan_netdef_pertype_iter_next(struct netdef_pertype_iter* it)
 
     while (g_hash_table_iter_next(&it->iter, &key, &value)) {
         NetplanNetDefinition* netdef = value;
+        if (netdef->type == NETPLAN_DEF_TYPE_NM_PLACEHOLDER_)
+            continue;
         if (it->type == NETPLAN_DEF_TYPE_NONE || netdef->type == it->type)
             return netdef;
     }
     return NULL;
 }
 
-NETPLAN_INTERNAL void
+void
 _netplan_netdef_pertype_iter_free(struct netdef_pertype_iter* it)
 {
     g_free(it);
@@ -818,7 +977,8 @@ netplan_copy_string(const char* input, char* out_buffer, size_t out_size)
     char* end = stpncpy(out_buffer, input, out_size);
     // If it point to the first byte past the buffer, we don't have enough
     // space in the buffer.
-    if (end - out_buffer == out_size)
+    size_t len = end - out_buffer;
+    if (len == out_size)
         return NETPLAN_BUFFER_TOO_SMALL;
     return end - out_buffer + 1;
 }
@@ -862,6 +1022,24 @@ ssize_t
 netplan_netdef_get_set_name(const NetplanNetDefinition* netdef, char* out_buffer, size_t out_buf_size)
 {
     return netplan_copy_string(netdef->set_name, out_buffer, out_buf_size);
+}
+
+ssize_t
+netplan_netdef_get_macaddress(const NetplanNetDefinition* netdef, char* out_buffer, size_t out_buf_size)
+{
+    return netplan_copy_string(netdef->set_mac, out_buffer, out_buf_size);
+}
+
+gboolean
+netplan_netdef_get_dhcp4(const NetplanNetDefinition* netdef)
+{
+    return netdef->dhcp4;
+}
+
+gboolean
+netplan_netdef_get_dhcp6(const NetplanNetDefinition* netdef)
+{
+    return netdef->dhcp6;
 }
 
 gboolean
@@ -939,7 +1117,7 @@ is_route_present(const NetplanNetDefinition* netdef, const NetplanIPRoute* route
 {
     const GArray* routes = netdef->routes;
 
-    for (int i = 0; i < routes->len; i++) {
+    for (guint i = 0; i < routes->len; i++) {
         const NetplanIPRoute* entry = g_array_index(routes, NetplanIPRoute*, i);
         if (
                 entry->family == route->family &&
@@ -963,7 +1141,7 @@ is_route_rule_present(const NetplanNetDefinition* netdef, const NetplanIPRule* r
 {
     const GArray* rules = netdef->ip_rules;
 
-    for (int i = 0; i < rules->len; i++) {
+    for (guint i = 0; i < rules->len; i++) {
         const NetplanIPRule* entry = g_array_index(rules, NetplanIPRule*, i);
         if (
                 entry->family == rule->family &&
@@ -990,4 +1168,12 @@ is_string_in_array(GArray* array, const char* value)
         }
     }
     return FALSE;
+}
+
+/* Check if the authentication key management algorithm uses a PSK password */
+gboolean
+_is_auth_key_management_psk(const NetplanAuthenticationSettings* auth)
+{
+    return (   auth->key_management == NETPLAN_AUTH_KEY_MANAGEMENT_WPA_PSK
+            || auth->key_management == NETPLAN_AUTH_KEY_MANAGEMENT_WPA_SAE);
 }

@@ -101,14 +101,16 @@ network={
 network={
   ssid="hidden-y"
   scan_ssid=1
-  key_mgmt=WPA-PSK
+  key_mgmt=WPA-PSK WPA-PSK-SHA256 SAE
+  ieee80211w=1
   psk="0bscur1ty"
 }
 ''', new_config)
             self.assertIn('''
 network={
   ssid="hidden-n"
-  key_mgmt=WPA-PSK
+  key_mgmt=WPA-PSK WPA-PSK-SHA256 SAE
+  ieee80211w=1
   psk="5ecur1ty"
 }
 ''', new_config)
@@ -117,7 +119,8 @@ network={
   ssid="workplace"
   bssid=de:ad:be:ef:ca:fe
   freq_list=5500
-  key_mgmt=WPA-PSK
+  key_mgmt=WPA-PSK WPA-PSK-SHA256 SAE
+  ieee80211w=1
   psk="c0mpany1"
 }
 ''', new_config)
@@ -126,7 +129,8 @@ network={
   ssid="Joe's Home"
   bssid=00:11:22:33:44:55
   freq_list=2462
-  key_mgmt=WPA-PSK
+  key_mgmt=WPA-PSK WPA-PSK-SHA256 SAE
+  ieee80211w=1
   psk="s0s3kr1t"
 }
 ''', new_config)
@@ -342,6 +346,168 @@ network={
         self.assertTrue(os.path.islink(os.path.join(
             self.workdir.name, 'run/systemd/system/systemd-networkd.service.wants/netplan-wpa-wl0.service')))
 
+    def test_wifi_wpa3_personal(self):
+        self.generate('''network:
+  version: 2
+  wifis:
+    wl0:
+      access-points:
+        homenet:
+          auth:
+            key-management: sae
+            password: "********"''')
+
+        self.assert_wpa_supplicant("wl0", """ctrl_interface=/run/wpa_supplicant
+
+network={
+  ssid="homenet"
+  key_mgmt=SAE
+  ieee80211w=2
+  psk="********"
+}
+""")
+
+    def test_wifi_wpa3_enterprise_eap_sha256(self):
+        self.generate('''network:
+  version: 2
+  wifis:
+    wl0:
+      access-points:
+        homenet:
+          auth:
+            key-management: eap-sha256
+            method: tls
+            anonymous-identity: "@cust.example.com"
+            identity: "cert-joe@cust.example.com"
+            ca-certificate: /etc/ssl/cust-cacrt.pem
+            client-certificate: /etc/ssl/cust-crt.pem
+            client-key: /etc/ssl/cust-key.pem
+            client-key-password: "**********"''')
+
+        self.assert_wpa_supplicant("wl0", """ctrl_interface=/run/wpa_supplicant
+
+network={
+  ssid="homenet"
+  key_mgmt=WPA-EAP WPA-EAP-SHA256
+  eap=TLS
+  ieee80211w=1
+  identity="cert-joe@cust.example.com"
+  anonymous_identity="@cust.example.com"
+  ca_cert="/etc/ssl/cust-cacrt.pem"
+  client_cert="/etc/ssl/cust-crt.pem"
+  private_key="/etc/ssl/cust-key.pem"
+  private_key_passwd="**********"
+}
+""")
+
+    def test_wifi_wpa3_enterprise_eap_suite_b_192(self):
+        self.generate('''network:
+  version: 2
+  wifis:
+    wl0:
+      access-points:
+        homenet:
+          auth:
+            key-management: eap-suite-b-192
+            method: tls
+            anonymous-identity: "@cust.example.com"
+            identity: "cert-joe@cust.example.com"
+            ca-certificate: /etc/ssl/cust-cacrt.pem
+            client-certificate: /etc/ssl/cust-crt.pem
+            client-key: /etc/ssl/cust-key.pem
+            client-key-password: "**********"''')
+
+        self.assert_wpa_supplicant("wl0", """ctrl_interface=/run/wpa_supplicant
+
+network={
+  ssid="homenet"
+  key_mgmt=WPA-EAP-SUITE-B-192
+  eap=TLS
+  ieee80211w=2
+  identity="cert-joe@cust.example.com"
+  anonymous_identity="@cust.example.com"
+  ca_cert="/etc/ssl/cust-cacrt.pem"
+  client_cert="/etc/ssl/cust-crt.pem"
+  private_key="/etc/ssl/cust-key.pem"
+  private_key_passwd="**********"
+}
+""")
+
+    def test_wifi_ieee8021x_eap_leap(self):
+        self.generate('''network:
+  version: 2
+  wifis:
+    wl0:
+      access-points:
+        homenet:
+          auth:
+            key-management: 802.1x
+            method: leap
+            identity: some-id
+            password: "********"''')
+
+        self.assert_wpa_supplicant("wl0", """ctrl_interface=/run/wpa_supplicant
+
+network={
+  ssid="homenet"
+  key_mgmt=IEEE8021X
+  eap=LEAP
+  identity="some-id"
+  password="********"
+}
+""")
+
+    def test_wifi_ieee8021x_eap_pwd(self):
+        self.generate('''network:
+  version: 2
+  wifis:
+    wl0:
+      access-points:
+        homenet:
+          auth:
+            key-management: 802.1x
+            method: pwd
+            identity: some-id
+            password: "********"''')
+
+        self.assert_wpa_supplicant("wl0", """ctrl_interface=/run/wpa_supplicant
+
+network={
+  ssid="homenet"
+  key_mgmt=IEEE8021X
+  eap=PWD
+  identity="some-id"
+  password="********"
+}
+""")
+
+    def test_wifi_ieee8021x_eap_and_psk(self):
+        self.generate('''network:
+  version: 2
+  wifis:
+    wl0:
+      access-points:
+        homenet:
+          password: psk_password
+          auth:
+            key-management: eap
+            method: leap
+            identity: some-id
+            password: "********"''')
+
+        self.assert_wpa_supplicant("wl0", """ctrl_interface=/run/wpa_supplicant
+
+network={
+  ssid="homenet"
+  key_mgmt=WPA-EAP
+  eap=LEAP
+  ieee80211w=1
+  identity="some-id"
+  psk="psk_password"
+  password="********"
+}
+""")
+
 
 class TestNetworkManager(TestBase):
 
@@ -394,6 +560,7 @@ channel=11
 
 [wifi-security]
 key-mgmt=wpa-psk
+pmf=2
 psk=s0s3kr1t
 ''',
                         'wl0-workplace': '''[connection]
@@ -416,6 +583,7 @@ channel=100
 
 [wifi-security]
 key-mgmt=wpa-psk
+pmf=2
 psk=c0mpany1
 ''',
                         'wl0-hidden-y': '''[connection]
@@ -436,6 +604,7 @@ hidden=true
 
 [wifi-security]
 key-mgmt=wpa-psk
+pmf=2
 psk=0bscur1ty
 ''',
                         'wl0-hidden-n': '''[connection]
@@ -455,6 +624,7 @@ mode=infrastructure
 
 [wifi-security]
 key-mgmt=wpa-psk
+pmf=2
 psk=5ecur1ty
 ''',
                         'wl0-channel-no-band': '''[connection]
@@ -573,6 +743,7 @@ mode=ap
 
 [wifi-security]
 key-mgmt=wpa-psk
+pmf=2
 psk=s0s3cret
 '''})
         self.assert_networkd({})
@@ -602,6 +773,298 @@ method=ignore
 [wifi]
 ssid=homenet
 mode=adhoc
+'''})
+
+    def test_wifi_adhoc_wpa_24ghz(self):
+        self.generate('''network:
+  version: 2
+  wifis:
+    wl0:
+      access-points:
+        homenet:
+          mode: adhoc
+          band: 2.4GHz
+          channel: 7
+          password: "********"''')
+
+        self.assert_wpa_supplicant("wl0", """ctrl_interface=/run/wpa_supplicant
+
+network={
+  ssid="homenet"
+  frequency=2442
+  mode=1
+  key_mgmt=WPA-PSK WPA-PSK-SHA256 SAE
+  ieee80211w=1
+  psk="********"
+}
+""")
+
+    def test_wifi_adhoc_wpa_5ghz(self):
+        self.generate('''network:
+  version: 2
+  wifis:
+    wl0:
+      access-points:
+        homenet:
+          mode: adhoc
+          band: 5GHz
+          channel: 7
+          password: "********"''')
+
+        self.assert_wpa_supplicant("wl0", """ctrl_interface=/run/wpa_supplicant
+
+network={
+  ssid="homenet"
+  frequency=5035
+  mode=1
+  key_mgmt=WPA-PSK WPA-PSK-SHA256 SAE
+  ieee80211w=1
+  psk="********"
+}
+""")
+
+    def test_wifi_wpa3_personal(self):
+        self.generate('''network:
+  version: 2
+  renderer: NetworkManager
+  wifis:
+    wl0:
+      access-points:
+        homenet:
+          auth:
+            key-management: sae
+            password: "********"''')
+
+        self.assert_nm({'wl0-homenet': '''[connection]
+id=netplan-wl0-homenet
+type=wifi
+interface-name=wl0
+
+[ipv4]
+method=link-local
+
+[ipv6]
+method=ignore
+
+[wifi]
+ssid=homenet
+mode=infrastructure
+
+[wifi-security]
+key-mgmt=sae
+pmf=3
+psk=********
+'''})
+
+    def test_wifi_wpa3_enterprise_eap_sha256(self):
+        self.generate('''network:
+  version: 2
+  renderer: NetworkManager
+  wifis:
+    wl0:
+      access-points:
+        homenet:
+          auth:
+            key-management: eap-sha256
+            method: tls
+            anonymous-identity: "@cust.example.com"
+            identity: "cert-joe@cust.example.com"
+            ca-certificate: /etc/ssl/cust-cacrt.pem
+            client-certificate: /etc/ssl/cust-crt.pem
+            client-key: /etc/ssl/cust-key.pem
+            client-key-password: "**********"''')
+
+        self.assert_nm({'wl0-homenet': '''[connection]
+id=netplan-wl0-homenet
+type=wifi
+interface-name=wl0
+
+[ipv4]
+method=link-local
+
+[ipv6]
+method=ignore
+
+[wifi]
+ssid=homenet
+mode=infrastructure
+
+[wifi-security]
+key-mgmt=wpa-eap
+pmf=2
+
+[802-1x]
+eap=tls
+identity=cert-joe@cust.example.com
+anonymous-identity=@cust.example.com
+ca-cert=/etc/ssl/cust-cacrt.pem
+client-cert=/etc/ssl/cust-crt.pem
+private-key=/etc/ssl/cust-key.pem
+private-key-password=**********
+'''})
+
+    def test_wifi_wpa3_enterprise_eap_suite_b_192(self):
+        self.generate('''network:
+  version: 2
+  renderer: NetworkManager
+  wifis:
+    wl0:
+      access-points:
+        homenet:
+          auth:
+            key-management: eap-suite-b-192
+            method: tls
+            anonymous-identity: "@cust.example.com"
+            identity: "cert-joe@cust.example.com"
+            ca-certificate: /etc/ssl/cust-cacrt.pem
+            client-certificate: /etc/ssl/cust-crt.pem
+            client-key: /etc/ssl/cust-key.pem
+            client-key-password: "**********"''')
+
+        self.assert_nm({'wl0-homenet': '''[connection]
+id=netplan-wl0-homenet
+type=wifi
+interface-name=wl0
+
+[ipv4]
+method=link-local
+
+[ipv6]
+method=ignore
+
+[wifi]
+ssid=homenet
+mode=infrastructure
+
+[wifi-security]
+key-mgmt=wpa-eap-suite-b-192
+pmf=3
+
+[802-1x]
+eap=tls
+identity=cert-joe@cust.example.com
+anonymous-identity=@cust.example.com
+ca-cert=/etc/ssl/cust-cacrt.pem
+client-cert=/etc/ssl/cust-crt.pem
+private-key=/etc/ssl/cust-key.pem
+private-key-password=**********
+'''})
+
+    def test_wifi_ieee8021x_leap(self):
+        self.generate('''network:
+  version: 2
+  renderer: NetworkManager
+  wifis:
+    wl0:
+      access-points:
+        homenet:
+          auth:
+            key-management: 802.1x
+            method: leap
+            identity: "some-id"
+            password: "**********"''')
+
+        self.assert_nm({'wl0-homenet': '''[connection]
+id=netplan-wl0-homenet
+type=wifi
+interface-name=wl0
+
+[ipv4]
+method=link-local
+
+[ipv6]
+method=ignore
+
+[wifi]
+ssid=homenet
+mode=infrastructure
+
+[wifi-security]
+key-mgmt=ieee8021x
+
+[802-1x]
+eap=leap
+identity=some-id
+password=**********
+'''})
+
+    def test_wifi_ieee8021x_pwd(self):
+        self.generate('''network:
+  version: 2
+  renderer: NetworkManager
+  wifis:
+    wl0:
+      access-points:
+        homenet:
+          auth:
+            key-management: 802.1x
+            method: pwd
+            identity: "some-id"
+            password: "**********"''')
+
+        self.assert_nm({'wl0-homenet': '''[connection]
+id=netplan-wl0-homenet
+type=wifi
+interface-name=wl0
+
+[ipv4]
+method=link-local
+
+[ipv6]
+method=ignore
+
+[wifi]
+ssid=homenet
+mode=infrastructure
+
+[wifi-security]
+key-mgmt=ieee8021x
+
+[802-1x]
+eap=pwd
+identity=some-id
+password=**********
+'''})
+
+    def test_wifi_eap_and_psk(self):
+        self.generate('''network:
+  version: 2
+  renderer: NetworkManager
+  wifis:
+    wl0:
+      access-points:
+        homenet:
+          password: psk_password
+          auth:
+            key-management: eap
+            method: leap
+            identity: "some-id"
+            password: "**********"''')
+
+        self.assert_nm({'wl0-homenet': '''[connection]
+id=netplan-wl0-homenet
+type=wifi
+interface-name=wl0
+
+[ipv4]
+method=link-local
+
+[ipv6]
+method=ignore
+
+[wifi]
+ssid=homenet
+mode=infrastructure
+
+[wifi-security]
+key-mgmt=wpa-eap
+pmf=2
+psk=psk_password
+
+[802-1x]
+eap=leap
+identity=some-id
+password=**********
 '''})
 
     def test_wifi_wowlan(self):

@@ -34,7 +34,7 @@
  * https://bugzilla.gnome.org/show_bug.cgi?id=696940
  * https://gitlab.freedesktop.org/NetworkManager/NetworkManager/-/commit/c36200a225aefb2a3919618e75682646899b82c0
  */
-static const NetplanDefType
+static NetplanDefType
 type_from_str(const char* type_str)
 {
     if (!g_strcmp0(type_str, "ethernet") || !g_strcmp0(type_str, "802-3-ethernet"))
@@ -47,19 +47,23 @@ type_from_str(const char* type_str)
         return NETPLAN_DEF_TYPE_BRIDGE;
     else if (!g_strcmp0(type_str, "bond"))
         return NETPLAN_DEF_TYPE_BOND;
-    /* TODO: Vlans are not yet fully supported by the keyfile parser
+    else if (!g_strcmp0(type_str, "dummy"))     /* wokeignore:rule=dummy */
+        return NETPLAN_DEF_TYPE_DUMMY;          /* wokeignore:rule=dummy */
+    else if (!g_strcmp0(type_str, "veth"))
+        return NETPLAN_DEF_TYPE_VETH;
     else if (!g_strcmp0(type_str, "vlan"))
         return NETPLAN_DEF_TYPE_VLAN;
-    */
-    /* TODO: Tunnels are not yet supported by the keyfile parser
-    else if (!g_strcmp0(type_str, "ip-tunnel") || !g_strcmp0(type_str, "wireguard"))
+    else if (!g_strcmp0(type_str, "vrf"))
+        return NETPLAN_DEF_TYPE_VRF;
+    else if (   !g_strcmp0(type_str, "wireguard")
+             || !g_strcmp0(type_str, "vxlan")
+             || !g_strcmp0(type_str, "ip-tunnel"))
         return NETPLAN_DEF_TYPE_TUNNEL;
-    */
     /* Unsupported type, needs to be specified via passthrough */
     return NETPLAN_DEF_TYPE_NM;
 }
 
-static const NetplanWifiMode
+static NetplanWifiMode
 ap_type_from_str(const char* type_str)
 {
     if (!g_strcmp0(type_str, "infrastructure"))
@@ -70,6 +74,17 @@ ap_type_from_str(const char* type_str)
         return NETPLAN_WIFI_MODE_ADHOC;
     /* Unsupported mode, like "mesh" */
     return NETPLAN_WIFI_MODE_OTHER;
+}
+
+static NetplanTunnelMode
+tunnel_mode_from_str(const char* type_str)
+{
+    if (!g_strcmp0(type_str, "wireguard"))
+        return NETPLAN_TUNNEL_MODE_WIREGUARD;
+    else if (!g_strcmp0(type_str, "vxlan"))
+        return NETPLAN_TUNNEL_MODE_VXLAN;
+
+    return NETPLAN_TUNNEL_MODE_UNKNOWN;
 }
 
 static void
@@ -101,7 +116,7 @@ set_true_on_match(GKeyFile* kf, const gchar* group, const gchar* key, const gcha
 }
 
 static void
-handle_generic_bool(GKeyFile* kf, const gchar* group, const gchar* key, gboolean* dataptr)
+keyfile_handle_generic_bool(GKeyFile* kf, const gchar* group, const gchar* key, gboolean* dataptr)
 {
     g_assert(dataptr);
     *dataptr = g_key_file_get_boolean(kf, group, key, NULL);
@@ -109,7 +124,7 @@ handle_generic_bool(GKeyFile* kf, const gchar* group, const gchar* key, gboolean
 }
 
 static void
-handle_generic_str(GKeyFile* kf, const gchar* group, const gchar* key, char** dataptr)
+keyfile_handle_generic_str(GKeyFile* kf, const gchar* group, const gchar* key, char** dataptr)
 {
     g_assert(dataptr);
     g_assert(!*dataptr);
@@ -119,7 +134,7 @@ handle_generic_str(GKeyFile* kf, const gchar* group, const gchar* key, char** da
 }
 
 static void
-handle_generic_uint(GKeyFile* kf, const gchar* group, const gchar* key, guint* dataptr, guint default_value)
+keyfile_handle_generic_uint(GKeyFile* kf, const gchar* group, const gchar* key, guint* dataptr, guint default_value)
 {
     g_assert(dataptr);
     if (g_key_file_has_key(kf, group, key, NULL)) {
@@ -131,20 +146,39 @@ handle_generic_uint(GKeyFile* kf, const gchar* group, const gchar* key, guint* d
 }
 
 static void
-handle_common(GKeyFile* kf, NetplanNetDefinition* nd, const gchar* group) {
-    handle_generic_str(kf, group, "cloned-mac-address", &nd->set_mac);
-    handle_generic_uint(kf, group, "mtu", &nd->mtubytes, NETPLAN_MTU_UNSPEC);
-    handle_generic_str(kf, group, "mac-address", &nd->match.mac);
+keyfile_handle_common(GKeyFile* kf, NetplanNetDefinition* nd, const gchar* group) {
+    keyfile_handle_generic_uint(kf, group, "mtu", &nd->mtubytes, NETPLAN_MTU_UNSPEC);
+    keyfile_handle_generic_str(kf, group, "mac-address", &nd->match.mac);
     if (nd->match.mac)
         nd->has_match = TRUE;
 }
 
 static void
-handle_bridge_uint(GKeyFile* kf, const gchar* key, NetplanNetDefinition* nd, char** dataptr) {
+keyfile_handle_bridge_uint(GKeyFile* kf, const gchar* key, NetplanNetDefinition* nd, char** dataptr) {
     if (g_key_file_get_uint64(kf, "bridge", key, NULL)) {
         nd->custom_bridging = TRUE;
         *dataptr = g_strdup_printf("%"G_GUINT64_FORMAT, g_key_file_get_uint64(kf, "bridge", key, NULL));
         _kf_clear_key(kf, "bridge", key);
+    }
+}
+
+static void
+keyfile_handle_cloned_mac_address(GKeyFile *kf, NetplanNetDefinition* nd, const gchar* group)
+{
+    g_autofree gchar* mac = g_key_file_get_string(kf, group, "cloned-mac-address", NULL);
+
+    if (!mac) return;
+
+    /* If the value of "cloned-mac-address" is one of the below we don't try to
+     * parse it and leave it in the passthrough section.
+     */
+    if (   g_strcmp0(mac, "preserve")
+        && g_strcmp0(mac, "permanent")
+        && g_strcmp0(mac, "random")
+        && g_strcmp0(mac, "stable")
+    ) {
+        nd->set_mac = g_strdup(mac);
+        _kf_clear_key(kf, group, "cloned-mac-address");
     }
 }
 
@@ -193,28 +227,22 @@ parse_routes(GKeyFile* kf, const gchar* group, GArray** routes_arr)
 {
     g_assert(routes_arr);
     NetplanIPRoute *route = NULL;
-    gchar *key = NULL;
-    gchar *kf_value = NULL;
-    gchar *options_key = NULL;
-    gchar *options_kf_value = NULL;
     gchar **split = NULL;
     for (unsigned i = 1;; ++i) {
         gboolean unhandled_data = FALSE;
-        key = g_strdup_printf("route%u", i);
-        kf_value = g_key_file_get_string(kf, group, key, NULL);
-        options_key = g_strdup_printf("route%u_options", i);
-        options_kf_value = g_key_file_get_string(kf, group, options_key, NULL);
-        if (!options_kf_value)
-            g_free(options_key);
-        if (!kf_value) {
-            g_free(key);
+        g_autofree gchar* key = g_strdup_printf("route%u", i);
+        g_autofree gchar* kf_value = g_key_file_get_string(kf, group, key, NULL);
+        g_autofree gchar* options_key = g_strdup_printf("route%u_options", i);
+        g_autofree gchar* options_kf_value = g_key_file_get_string(kf, group, options_key, NULL);
+
+        if (!kf_value)
             break;
-        }
+
         if (!*routes_arr)
             *routes_arr = g_array_new(FALSE, TRUE, sizeof(NetplanIPRoute*));
         route = g_new0(NetplanIPRoute, 1);
         route->type = g_strdup("unicast");
-        route->family = G_MAXUINT; /* 0 is a valid family ID */
+        route->family = -1; /* 0 is a valid family ID */
         route->metric = NETPLAN_METRIC_UNSPEC; /* 0 is a valid metric */
         g_debug("%s: adding new route (kf)", key);
 
@@ -273,16 +301,12 @@ parse_routes(GKeyFile* kf, const gchar* group, GArray** routes_arr)
 
             if (!unhandled_data)
                 _kf_clear_key(kf, group, options_key);
-            g_free(options_key);
-            g_free(options_kf_value);
         }
 
         /* Add route to array, clear keyfile */
         g_array_append_val(*routes_arr, route);
         if (!unhandled_data)
             _kf_clear_key(kf, group, key);
-        g_free(key);
-        g_free(kf_value);
     }
 }
 
@@ -296,7 +320,7 @@ parse_dhcp_overrides(GKeyFile* kf, const gchar* group, NetplanDHCPOverrides* dat
         _kf_clear_key(kf, group, "ignore-auto-routes");
         _kf_clear_key(kf, group, "never-default");
     }
-    handle_generic_uint(kf, group, "route-metric", &(*dataptr).metric, NETPLAN_METRIC_UNSPEC);
+    keyfile_handle_generic_uint(kf, group, "route-metric", &(*dataptr).metric, NETPLAN_METRIC_UNSPEC);
 }
 
 /*
@@ -362,6 +386,12 @@ parse_dot1x_auth(GKeyFile* kf, NetplanAuthenticationSettings* auth)
             auth->eap_method = NETPLAN_AUTH_EAP_PEAP;
         } else if (g_strcmp0(first_method, "ttls") == 0) {
             auth->eap_method = NETPLAN_AUTH_EAP_TTLS;
+        } else if (g_strcmp0(first_method, "leap") == 0) {
+            auth->eap_method = NETPLAN_AUTH_EAP_LEAP;
+        } else if (g_strcmp0(first_method, "pwd") == 0) {
+            auth->eap_method = NETPLAN_AUTH_EAP_PWD;
+        } else {
+            auth->eap_method = NETPLAN_AUTH_EAP_UNKNOWN;
         }
 
         /* If "method" (which is a list separated by ";") has more than one value,
@@ -370,22 +400,24 @@ parse_dot1x_auth(GKeyFile* kf, NetplanAuthenticationSettings* auth)
          * but Netplan accepts only one.
          *
          * TODO: eap_method needs to be fixed to store multiple methods.
+         *
+         * If at this point the eap_method is still UNKNOWN we also keep the property because
+         * it's probably a setting we still don't support.
          */
-        if (split[1] == NULL || !g_strcmp0(split[1], ""))
+        if (auth->eap_method != NETPLAN_AUTH_EAP_UNKNOWN && (split[1] == NULL || !g_strcmp0(split[1], "")))
             _kf_clear_key(kf, "802-1x", "eap");
 
         g_strfreev(split);
     }
 
-    handle_generic_str(kf, "802-1x", "identity", &auth->identity);
-    handle_generic_str(kf, "802-1x", "anonymous-identity", &auth->anonymous_identity);
-    if (!auth->password)
-        handle_generic_str(kf, "802-1x", "password", &auth->password);
-    handle_generic_str(kf, "802-1x", "ca-cert", &auth->ca_certificate);
-    handle_generic_str(kf, "802-1x", "client-cert", &auth->client_certificate);
-    handle_generic_str(kf, "802-1x", "private-key", &auth->client_key);
-    handle_generic_str(kf, "802-1x", "private-key-password", &auth->client_key_password);
-    handle_generic_str(kf, "802-1x", "phase2-auth", &auth->phase2_auth);
+    keyfile_handle_generic_str(kf, "802-1x", "identity", &auth->identity);
+    keyfile_handle_generic_str(kf, "802-1x", "anonymous-identity", &auth->anonymous_identity);
+    keyfile_handle_generic_str(kf, "802-1x", "password", &auth->password);
+    keyfile_handle_generic_str(kf, "802-1x", "ca-cert", &auth->ca_certificate);
+    keyfile_handle_generic_str(kf, "802-1x", "client-cert", &auth->client_certificate);
+    keyfile_handle_generic_str(kf, "802-1x", "private-key", &auth->client_key);
+    keyfile_handle_generic_str(kf, "802-1x", "private-key-password", &auth->client_key_password);
+    keyfile_handle_generic_str(kf, "802-1x", "phase2-auth", &auth->phase2_auth);
 }
 
 static void
@@ -439,11 +471,138 @@ read_passthrough(GKeyFile* kf, GData** list)
                 }
                 group_key = g_strconcat(groups[i], ".", keys[j], NULL);
                 g_datalist_set_data_full(list, group_key, value, g_free);
-                /* no need to free group_key and value: they stay in the list */
+                g_free(group_key);
             }
             g_strfreev(keys);
         }
         g_strfreev(groups);
+    }
+}
+
+/*
+ * Network Manager differentiates Wireguard (connection.type=wireguard),
+ * VXLAN (connection.type=vxlan) and all the other types of tunnels (connection.type=ip-tunnel).
+ *
+ * Each of these three classes have different requirements so we handle them separately
+ * in this function.
+ */
+static void
+parse_tunnels(GKeyFile* kf, NetplanNetDefinition* nd)
+{
+    /* Handle wireguard tunnel */
+    if (nd->tunnel.mode == NETPLAN_TUNNEL_MODE_WIREGUARD) {
+
+        /* Reading the private key */
+        nd->tunnel.private_key = g_key_file_get_string(kf, "wireguard", "private-key", NULL);
+        _kf_clear_key(kf, "wireguard", "private-key");
+
+        /* Reading the listen port */
+        nd->tunnel.port = g_key_file_get_uint64(kf, "wireguard", "listen-port", NULL);
+        _kf_clear_key(kf, "wireguard", "listen-port");
+
+        nd->tunnel_private_key_flags = g_key_file_get_integer(kf, "wireguard", "private-key-flags", NULL);
+        _kf_clear_key(kf, "wireguard", "private-key-flags");
+
+        gchar** keyfile_groups = g_key_file_get_groups(kf, NULL);
+
+        /* Handling peers
+         * Network Manager creates a keyfile group for each Wireguard peer.
+         * The group name has the form [wireguard-peer.<peer's public key>] so,
+         * in order to read the peer's public key we need to split up the group name
+         * and read its second component.
+         * */
+        for (int i = 0; keyfile_groups[i] != NULL; i++) {
+            gchar* group = keyfile_groups[i];
+
+            if (g_str_has_prefix(group, "wireguard-peer.")) {
+                gchar** peer_split = g_strsplit(group, ".", 2);
+
+                if (!is_wireguard_key(peer_split[1])) {
+                    g_warning("Wireguard peer's name is malformed: %s", group);
+                    g_strfreev(peer_split);
+                    continue;
+                }
+
+                if (!nd->wireguard_peers)
+                    nd->wireguard_peers = g_array_new(FALSE, FALSE, sizeof(NetplanWireguardPeer*));
+
+                NetplanWireguardPeer* wireguard_peer = g_new0(NetplanWireguardPeer, 1);
+                wireguard_peer->public_key = g_strdup(peer_split[1]);
+                g_strfreev(peer_split);
+
+                /* Handle allowed-ips */
+                gchar* allowed_ips_str = g_key_file_get_string(kf, group, "allowed-ips", NULL);
+                if (allowed_ips_str) {
+                    wireguard_peer->allowed_ips = g_array_new(FALSE, FALSE, sizeof(NetplanAddressOptions*));
+                    gchar** allowed_ips_split = g_strsplit(allowed_ips_str, ";", 0);
+
+                    for (int i = 0; allowed_ips_split[i] != NULL; i++) {
+                        gchar* ip = allowed_ips_split[i];
+                        if (g_strcmp0(ip, "")) {
+                            gchar* address = NULL;
+                            /*
+                             * NM doesn't care if the prefix was omitted.
+                             * Even though the WG manual says it requires the prefix,
+                             * if it's omitted in its config file it will default to /32
+                             * so we should do the same here and append a /32 if it's not present,
+                             * otherwise we will generate a YAML that will fail validation.
+                             */
+                            if (!g_strrstr(ip, "/"))
+                                address = g_strdup_printf("%s/32", ip);
+                            else
+                                address = g_strdup(ip);
+                            g_array_append_val(wireguard_peer->allowed_ips, address);
+                        }
+                    }
+                    g_free(allowed_ips_str);
+                    g_strfreev(allowed_ips_split);
+                    _kf_clear_key(kf, group, "allowed-ips");
+                }
+
+                /* Handle endpoint */
+                gchar* endpoint = g_key_file_get_string(kf, group, "endpoint", NULL);
+                if (endpoint && g_strcmp0(endpoint, "")) {
+                    /* Only set the endpoint if it's not NULL nor an empty string */
+                    wireguard_peer->endpoint = endpoint;
+                }
+                _kf_clear_key(kf, group, "endpoint");
+
+                g_array_append_val(nd->wireguard_peers, wireguard_peer);
+            }
+        }
+        g_strfreev(keyfile_groups);
+
+    } else if (nd->tunnel.mode == NETPLAN_TUNNEL_MODE_VXLAN) {
+        /* Handle vxlan tunnel */
+
+        nd->vxlan = g_new0(NetplanVxlan, 1);
+        reset_vxlan(nd->vxlan);
+
+        /* Reading the VXLAN ID*/
+        nd->vxlan->vni = g_key_file_get_integer(kf, "vxlan", "id", NULL);
+        _kf_clear_key(kf, "vxlan", "id");
+
+        nd->tunnel.local_ip = g_key_file_get_string(kf, "vxlan", "local", NULL);
+        _kf_clear_key(kf, "vxlan", "local");
+        nd->tunnel.remote_ip = g_key_file_get_string(kf, "vxlan", "remote", NULL);
+        _kf_clear_key(kf, "vxlan", "remote");
+    } else {
+        /* Handle all the other types of tunnel */
+
+        nd->tunnel.mode = g_key_file_get_integer(kf, "ip-tunnel", "mode", NULL);
+
+        /* We don't want to automatically accept new types of tunnels introduced by Network Manager */
+        if (nd->tunnel.mode >= NETPLAN_TUNNEL_MODE_NM_MAX) {
+            nd->tunnel.mode = NETPLAN_TUNNEL_MODE_UNKNOWN;
+            return;
+        }
+
+        _kf_clear_key(kf, "ip-tunnel", "mode");
+
+        nd->tunnel.local_ip = g_key_file_get_string(kf, "ip-tunnel", "local", NULL);
+        _kf_clear_key(kf, "ip-tunnel", "local");
+        nd->tunnel.remote_ip = g_key_file_get_string(kf, "ip-tunnel", "remote", NULL);
+        _kf_clear_key(kf, "ip-tunnel", "remote");
     }
 }
 
@@ -462,6 +621,7 @@ netplan_parser_load_keyfile(NetplanParser* npp, const char* filename, GError** e
     g_autofree gchar* netdef_id = NULL;
     ssize_t netdef_id_size = 0;
     gchar *tmp_str = NULL;
+    gint pmf = 0;
     NetplanNetDefinition* nd = NULL;
     NetplanWifiAccessPoint* ap = NULL;
     g_autoptr(GKeyFile) kf = g_key_file_new();
@@ -479,13 +639,17 @@ netplan_parser_load_keyfile(NetplanParser* npp, const char* filename, GError** e
     netdef_id_size = netplan_get_id_from_nm_filepath(filename, ssid, netdef_id, strlen(filename));
     uuid = g_key_file_get_string(kf, "connection", "uuid", NULL);
     if (!uuid) {
-        g_warning("netplan: Keyfile: cannot find connection.uuid");
+        const char* msg = "netplan: Keyfile: cannot find connection.uuid";
+        g_set_error(error, NETPLAN_VALIDATION_ERROR, NETPLAN_ERROR_CONFIG_GENERIC, "%s", msg);
+        g_warning("%s", msg);
         return FALSE;
     }
 
     type = g_key_file_get_string(kf, "connection", "type", NULL);
     if (!type) {
-        g_warning("netplan: Keyfile: cannot find connection.type");
+        const char* msg = "netplan: Keyfile: cannot find connection.type";
+        g_set_error(error, NETPLAN_VALIDATION_ERROR, NETPLAN_ERROR_CONFIG_GENERIC, "%s", msg);
+        g_warning("%s", msg);
         return FALSE;
     }
     nd_type = type_from_str(type);
@@ -525,12 +689,48 @@ netplan_parser_load_keyfile(NetplanParser* npp, const char* filename, GError** e
     }
     g_free(tmp_str);
 
+    /* Handle tunnels */
+    if (nd_type == NETPLAN_DEF_TYPE_TUNNEL) {
+        nd->tunnel.mode = tunnel_mode_from_str(type);
+        parse_tunnels(kf, nd);
+    }
+
+    /* Handle veths */
+    if (nd_type == NETPLAN_DEF_TYPE_VETH) {
+        g_autofree gchar* veth_peer = g_key_file_get_string(kf, "veth", "peer", NULL);
+        if (!veth_peer) {
+            g_warning("netplan: Keyfile: cannot find veth.peer");
+            return FALSE;
+        } else {
+            /*
+             * Generate a placeholder interface to be the VETH's peer.
+             * It's required because Network Manager allows the creation of
+             * VETHs connections with a non-existing peer.
+             */
+            nd->veth_peer_link = netplan_netdef_new(npp, veth_peer, NETPLAN_DEF_TYPE_NM_PLACEHOLDER_, NETPLAN_BACKEND_NM);
+            _kf_clear_key(kf, "veth", "peer");
+        }
+    }
+
+    /* Handle VRFs */
+    if (nd_type == NETPLAN_DEF_TYPE_VRF) {
+        if (g_key_file_has_key(kf, "vrf", "table", NULL)) {
+            nd->vrf_table = g_key_file_get_uint64(kf, "vrf", "table", NULL);
+            _kf_clear_key(kf, "vrf", "table");
+        }
+    }
+
     /* remove supported values from passthrough, which have been handled */
     if (   nd_type == NETPLAN_DEF_TYPE_ETHERNET
         || nd_type == NETPLAN_DEF_TYPE_WIFI
         || nd_type == NETPLAN_DEF_TYPE_MODEM
         || nd_type == NETPLAN_DEF_TYPE_BRIDGE
-        || nd_type == NETPLAN_DEF_TYPE_BOND)
+        || nd_type == NETPLAN_DEF_TYPE_BOND
+        || nd_type == NETPLAN_DEF_TYPE_DUMMY       /* wokeignore:rule=dummy */
+        || nd_type == NETPLAN_DEF_TYPE_VLAN
+        || nd_type == NETPLAN_DEF_TYPE_VETH
+        || nd_type == NETPLAN_DEF_TYPE_VRF
+        || (nd_type == NETPLAN_DEF_TYPE_TUNNEL && nd->tunnel.mode != NETPLAN_TUNNEL_MODE_UNKNOWN))
         _kf_clear_key(kf, "connection", "type");
 
     /* Handle match: Netplan usually defines a connection per interface, while
@@ -556,8 +756,8 @@ netplan_parser_load_keyfile(NetplanParser* npp, const char* filename, GError** e
     parse_addresses(kf, "ipv6", &nd->ip6_addresses);
 
     /* Default gateways */
-    handle_generic_str(kf, "ipv4", "gateway", &nd->gateway4);
-    handle_generic_str(kf, "ipv6", "gateway", &nd->gateway6);
+    keyfile_handle_generic_str(kf, "ipv4", "gateway", &nd->gateway4);
+    keyfile_handle_generic_str(kf, "ipv6", "gateway", &nd->gateway6);
 
     /* Routes */
     parse_routes(kf, "ipv4", &nd->routes);
@@ -583,7 +783,7 @@ netplan_parser_load_keyfile(NetplanParser* npp, const char* filename, GError** e
         }
     }
     g_free(tmp_str);
-    handle_generic_str(kf, "ipv6", "token", &nd->ip6_addr_gen_token);
+    keyfile_handle_generic_str(kf, "ipv6", "token", &nd->ip6_addr_gen_token);
 
     /* ip6-privacy is not fully supported, NM supports additional modes, like -1 or 1
      * handle known modes, but keep any unsupported "ip6-privacy" value in passthrough */
@@ -605,26 +805,26 @@ netplan_parser_load_keyfile(NetplanParser* npp, const char* filename, GError** e
      * combines them as "modems". We need to parse a basic set of parameters
      * to enable the generator (in nm.c) to detect GSM vs CDMA connections,
      * using its modem_is_gsm() util. */
-    handle_generic_bool(kf, "gsm", "auto-config", &nd->modem_params.auto_config);
-    handle_generic_str(kf, "gsm", "apn", &nd->modem_params.apn);
-    handle_generic_str(kf, "gsm", "device-id", &nd->modem_params.device_id);
-    handle_generic_str(kf, "gsm", "network-id", &nd->modem_params.network_id);
-    handle_generic_str(kf, "gsm", "pin", &nd->modem_params.pin);
-    handle_generic_str(kf, "gsm", "sim-id", &nd->modem_params.sim_id);
-    handle_generic_str(kf, "gsm", "sim-operator-id", &nd->modem_params.sim_operator_id);
+    keyfile_handle_generic_bool(kf, "gsm", "auto-config", &nd->modem_params.auto_config);
+    keyfile_handle_generic_str(kf, "gsm", "apn", &nd->modem_params.apn);
+    keyfile_handle_generic_str(kf, "gsm", "device-id", &nd->modem_params.device_id);
+    keyfile_handle_generic_str(kf, "gsm", "network-id", &nd->modem_params.network_id);
+    keyfile_handle_generic_str(kf, "gsm", "pin", &nd->modem_params.pin);
+    keyfile_handle_generic_str(kf, "gsm", "sim-id", &nd->modem_params.sim_id);
+    keyfile_handle_generic_str(kf, "gsm", "sim-operator-id", &nd->modem_params.sim_operator_id);
 
     /* GSM & CDMA */
-    handle_generic_uint(kf, "cdma", "mtu", &nd->mtubytes, NETPLAN_MTU_UNSPEC);
-    handle_generic_uint(kf, "gsm", "mtu", &nd->mtubytes, NETPLAN_MTU_UNSPEC);
-    handle_generic_str(kf, "gsm", "number", &nd->modem_params.number);
+    keyfile_handle_generic_uint(kf, "cdma", "mtu", &nd->mtubytes, NETPLAN_MTU_UNSPEC);
+    keyfile_handle_generic_uint(kf, "gsm", "mtu", &nd->mtubytes, NETPLAN_MTU_UNSPEC);
+    keyfile_handle_generic_str(kf, "gsm", "number", &nd->modem_params.number);
     if (!nd->modem_params.number)
-        handle_generic_str(kf, "cdma", "number", &nd->modem_params.number);
-    handle_generic_str(kf, "gsm", "password", &nd->modem_params.password);
+        keyfile_handle_generic_str(kf, "cdma", "number", &nd->modem_params.number);
+    keyfile_handle_generic_str(kf, "gsm", "password", &nd->modem_params.password);
     if (!nd->modem_params.password)
-        handle_generic_str(kf, "cdma", "password", &nd->modem_params.password);
-    handle_generic_str(kf, "gsm", "username", &nd->modem_params.username);
+        keyfile_handle_generic_str(kf, "cdma", "password", &nd->modem_params.password);
+    keyfile_handle_generic_str(kf, "gsm", "username", &nd->modem_params.username);
     if (!nd->modem_params.username)
-        handle_generic_str(kf, "cdma", "username", &nd->modem_params.username);
+        keyfile_handle_generic_str(kf, "cdma", "username", &nd->modem_params.username);
 
     /* Ethernets */
     if (g_key_file_has_group(kf, "ethernet")) {
@@ -641,7 +841,8 @@ netplan_parser_load_keyfile(NetplanParser* npp, const char* filename, GError** e
                 _kf_clear_key(kf, "ethernet", "wake-on-lan"); // value "off" is supported
         }
 
-        handle_common(kf, nd, "ethernet");
+        keyfile_handle_common(kf, nd, "ethernet");
+        keyfile_handle_cloned_mac_address(kf, nd, "ethernet");
     }
 
     /* Wifis */
@@ -653,7 +854,8 @@ netplan_parser_load_keyfile(NetplanParser* npp, const char* filename, GError** e
             nd->wowlan = NETPLAN_WIFI_WOWLAN_DEFAULT;
         }
 
-        handle_common(kf, nd, "wifi");
+        keyfile_handle_common(kf, nd, "wifi");
+        keyfile_handle_cloned_mac_address(kf, nd, "wifi");
     }
 
     /* Cleanup some implicit keys */
@@ -671,49 +873,62 @@ netplan_parser_load_keyfile(NetplanParser* npp, const char* filename, GError** e
         _kf_clear_key(kf, "ipv4", "method");
     g_free(tmp_str);
 
-    /* Vlan: XXX: find a way to parse the "link:" (parent) connection */
-    handle_generic_uint(kf, "vlan", "id", &nd->vlan_id, G_MAXUINT);
+    /* Handling VLANs */
+    if (nd_type == NETPLAN_DEF_TYPE_VLAN) {
+        keyfile_handle_generic_uint(kf, "vlan", "id", &nd->vlan_id, G_MAXUINT);
+        g_autofree gchar* parent = g_key_file_get_string(kf, "vlan", "parent", NULL);
+
+        if (parent) {
+            /*
+             * Generate a placeholder interface to be the VLAN's parent.
+             * It's required because Network Manager allows the creation of
+             * VLAN connections with non-existing parent interfaces.
+             */
+            nd->vlan_link = netplan_netdef_new(npp, parent, NETPLAN_DEF_TYPE_NM_PLACEHOLDER_, NETPLAN_BACKEND_NM);
+            _kf_clear_key(kf, "vlan", "parent");
+        }
+    }
 
     /* Bridge: XXX: find a way to parse the bridge-port.priority & bridge-port.path-cost values */
-    handle_generic_uint(kf, "bridge", "priority", &nd->bridge_params.priority, 0);
+    keyfile_handle_generic_uint(kf, "bridge", "priority", &nd->bridge_params.priority, 0);
     if (nd->bridge_params.priority)
         nd->custom_bridging = TRUE;
-    handle_bridge_uint(kf, "ageing-time", nd, &nd->bridge_params.ageing_time);
-    handle_bridge_uint(kf, "hello-time", nd, &nd->bridge_params.hello_time);
-    handle_bridge_uint(kf, "forward-delay", nd, &nd->bridge_params.forward_delay);
-    handle_bridge_uint(kf, "max-age", nd, &nd->bridge_params.max_age);
+    keyfile_handle_bridge_uint(kf, "ageing-time", nd, &nd->bridge_params.ageing_time);
+    keyfile_handle_bridge_uint(kf, "hello-time", nd, &nd->bridge_params.hello_time);
+    keyfile_handle_bridge_uint(kf, "forward-delay", nd, &nd->bridge_params.forward_delay);
+    keyfile_handle_bridge_uint(kf, "max-age", nd, &nd->bridge_params.max_age);
     /* STP needs to be handled last, for its different default value in custom_bridging mode */
     if (g_key_file_has_key(kf, "bridge", "stp", NULL)) {
         nd->custom_bridging = TRUE;
-        handle_generic_bool(kf, "bridge", "stp", &nd->bridge_params.stp);
+        keyfile_handle_generic_bool(kf, "bridge", "stp", &nd->bridge_params.stp);
     } else if(nd->custom_bridging) {
         nd->bridge_params.stp = TRUE; //set default value if not specified otherwise
     }
 
     /* Bonds */
-    handle_generic_str(kf, "bond", "mode", &nd->bond_params.mode);
-    handle_generic_str(kf, "bond", "lacp_rate", &nd->bond_params.lacp_rate);
-    handle_generic_str(kf, "bond", "miimon", &nd->bond_params.monitor_interval);
-    handle_generic_str(kf, "bond", "xmit_hash_policy", &nd->bond_params.transmit_hash_policy);
-    handle_generic_str(kf, "bond", "ad_select", &nd->bond_params.selection_logic);
-    handle_generic_str(kf, "bond", "arp_interval", &nd->bond_params.arp_interval);
-    handle_generic_str(kf, "bond", "arp_validate", &nd->bond_params.arp_validate);
-    handle_generic_str(kf, "bond", "arp_all_targets", &nd->bond_params.arp_all_targets);
-    handle_generic_str(kf, "bond", "updelay", &nd->bond_params.up_delay);
-    handle_generic_str(kf, "bond", "downdelay", &nd->bond_params.down_delay);
-    handle_generic_str(kf, "bond", "fail_over_mac", &nd->bond_params.fail_over_mac_policy);
-    handle_generic_str(kf, "bond", "primary_reselect", &nd->bond_params.primary_reselect_policy);
-    handle_generic_str(kf, "bond", "lp_interval", &nd->bond_params.learn_interval);
-    handle_generic_str(kf, "bond", "primary", &nd->bond_params.primary_member);
-    handle_generic_uint(kf, "bond", "min_links", &nd->bond_params.min_links, 0);
-    handle_generic_uint(kf, "bond", "resend_igmp", &nd->bond_params.resend_igmp, 0);
-    handle_generic_uint(kf, "bond", "packets_per_slave", &nd->bond_params.packets_per_member, 0); /* wokeignore:rule=slave */
-    handle_generic_uint(kf, "bond", "num_grat_arp", &nd->bond_params.gratuitous_arp, 0);
+    keyfile_handle_generic_str(kf, "bond", "mode", &nd->bond_params.mode);
+    keyfile_handle_generic_str(kf, "bond", "lacp_rate", &nd->bond_params.lacp_rate);
+    keyfile_handle_generic_str(kf, "bond", "miimon", &nd->bond_params.monitor_interval);
+    keyfile_handle_generic_str(kf, "bond", "xmit_hash_policy", &nd->bond_params.transmit_hash_policy);
+    keyfile_handle_generic_str(kf, "bond", "ad_select", &nd->bond_params.selection_logic);
+    keyfile_handle_generic_str(kf, "bond", "arp_interval", &nd->bond_params.arp_interval);
+    keyfile_handle_generic_str(kf, "bond", "arp_validate", &nd->bond_params.arp_validate);
+    keyfile_handle_generic_str(kf, "bond", "arp_all_targets", &nd->bond_params.arp_all_targets);
+    keyfile_handle_generic_str(kf, "bond", "updelay", &nd->bond_params.up_delay);
+    keyfile_handle_generic_str(kf, "bond", "downdelay", &nd->bond_params.down_delay);
+    keyfile_handle_generic_str(kf, "bond", "fail_over_mac", &nd->bond_params.fail_over_mac_policy);
+    keyfile_handle_generic_str(kf, "bond", "primary_reselect", &nd->bond_params.primary_reselect_policy);
+    keyfile_handle_generic_str(kf, "bond", "lp_interval", &nd->bond_params.learn_interval);
+    keyfile_handle_generic_str(kf, "bond", "primary", &nd->bond_params.primary_member);
+    keyfile_handle_generic_uint(kf, "bond", "min_links", &nd->bond_params.min_links, 0);
+    keyfile_handle_generic_uint(kf, "bond", "resend_igmp", &nd->bond_params.resend_igmp, 0);
+    keyfile_handle_generic_uint(kf, "bond", "packets_per_slave", &nd->bond_params.packets_per_member, 0); /* wokeignore:rule=slave */
+    keyfile_handle_generic_uint(kf, "bond", "num_grat_arp", &nd->bond_params.gratuitous_arp, 0);
     /* num_unsol_na might overwrite num_grat_arp, but we're fine if they are equal:
      * https://github.com/NetworkManager/NetworkManager/commit/42b0bef33c77a0921590b2697f077e8ea7805166 */
     if (g_key_file_get_uint64(kf, "bond", "num_unsol_na", NULL) == nd->bond_params.gratuitous_arp)
         _kf_clear_key(kf, "bond", "num_unsol_na");
-    handle_generic_bool(kf, "bond", "all_slaves_active", &nd->bond_params.all_members_active); /* wokeignore:rule=slave */
+    keyfile_handle_generic_bool(kf, "bond", "all_slaves_active", &nd->bond_params.all_members_active); /* wokeignore:rule=slave */
     parse_bond_arp_ip_targets(kf, &nd->bond_params.arp_ip_targets);
 
     /* Special handling for WiFi "access-points:" mapping */
@@ -721,7 +936,9 @@ netplan_parser_load_keyfile(NetplanParser* npp, const char* filename, GError** e
         ap = g_new0(NetplanWifiAccessPoint, 1);
         ap->ssid = g_key_file_get_string(kf, "wifi", "ssid", NULL);
         if (!ap->ssid) {
-            g_warning("netplan: Keyfile: cannot find SSID for WiFi connection");
+            const char* msg = "netplan: Keyfile: cannot find SSID for WiFi connection";
+            g_set_error(error, NETPLAN_VALIDATION_ERROR, NETPLAN_ERROR_CONFIG_GENERIC, "%s", msg);
+            g_warning("%s", msg);
             g_free(ap);
             return FALSE;
         } else
@@ -741,8 +958,8 @@ netplan_parser_load_keyfile(NetplanParser* npp, const char* filename, GError** e
         }
         g_free(tmp_str);
 
-        handle_generic_bool(kf, "wifi", "hidden", &ap->hidden);
-        handle_generic_str(kf, "wifi", "bssid", &ap->bssid);
+        keyfile_handle_generic_bool(kf, "wifi", "hidden", &ap->hidden);
+        keyfile_handle_generic_str(kf, "wifi", "bssid", &ap->bssid);
 
         /* Wifi band & channel */
         tmp_str = g_key_file_get_string(kf, "wifi", "band", NULL);
@@ -754,7 +971,7 @@ netplan_parser_load_keyfile(NetplanParser* npp, const char* filename, GError** e
             _kf_clear_key(kf, "wifi", "band");
         }
         g_free(tmp_str);
-        handle_generic_uint(kf, "wifi", "channel", &ap->channel, 0);
+        keyfile_handle_generic_uint(kf, "wifi", "channel", &ap->channel, 0);
 
         /* Wifi security */
         tmp_str = g_key_file_get_string(kf, "wifi-security", "key-mgmt", NULL);
@@ -766,6 +983,14 @@ netplan_parser_load_keyfile(NetplanParser* npp, const char* filename, GError** e
             ap->auth.key_management = NETPLAN_AUTH_KEY_MANAGEMENT_WPA_EAP;
             ap->has_auth = TRUE;
             _kf_clear_key(kf, "wifi-security", "key-mgmt");
+        } else if (tmp_str && g_strcmp0(tmp_str, "wpa-eap-suite-b-192") == 0) {
+            ap->auth.key_management = NETPLAN_AUTH_KEY_MANAGEMENT_WPA_EAPSUITE_B_192;
+            ap->has_auth = TRUE;
+            _kf_clear_key(kf, "wifi-security", "key-mgmt");
+        } else if (tmp_str && g_strcmp0(tmp_str, "sae") == 0) {
+            ap->auth.key_management = NETPLAN_AUTH_KEY_MANAGEMENT_WPA_SAE;
+            ap->has_auth = TRUE;
+            _kf_clear_key(kf, "wifi-security", "key-mgmt");
         } else if (tmp_str && g_strcmp0(tmp_str, "ieee8021x") == 0) {
             ap->auth.key_management = NETPLAN_AUTH_KEY_MANAGEMENT_8021X;
             ap->has_auth = TRUE;
@@ -773,8 +998,28 @@ netplan_parser_load_keyfile(NetplanParser* npp, const char* filename, GError** e
         }
         g_free(tmp_str);
 
-        handle_generic_str(kf, "wifi-security", "psk", &ap->auth.password);
-        if (ap->auth.password)
+        pmf = g_key_file_get_integer(kf, "wifi-security", "pmf", NULL);
+        switch (pmf) {
+            case 2:
+                ap->auth.pmf_mode = NETPLAN_AUTH_PMF_MODE_OPTIONAL;
+                _kf_clear_key(kf, "wifi-security", "pmf");
+                /* If pmf is set to 2 (optional) and the key management is EAP
+                 * we set it to EAPSHA256 so the correct method is emitted in the YAML
+                 */
+                if (ap->auth.key_management == NETPLAN_AUTH_KEY_MANAGEMENT_WPA_EAP)
+                    ap->auth.key_management = NETPLAN_AUTH_KEY_MANAGEMENT_WPA_EAPSHA256;
+                break;
+
+            case 3:
+                ap->auth.pmf_mode = NETPLAN_AUTH_PMF_MODE_REQUIRED;
+                _kf_clear_key(kf, "wifi-security", "pmf");
+                break;
+
+            default: break;
+        }
+
+        keyfile_handle_generic_str(kf, "wifi-security", "psk", &ap->auth.psk);
+        if (ap->auth.psk)
             ap->has_auth = TRUE;
 
         parse_dot1x_auth(kf, &ap->auth);
@@ -797,8 +1042,6 @@ only_passthrough:
         /* Last: handle passthrough for everything left in the keyfile */
         read_passthrough(kf, &nd->backend_settings.passthrough);
     }
-
-    g_key_file_free(kf);
 
     /* validate definition-level conditions */
     if (!npp->missing_id)

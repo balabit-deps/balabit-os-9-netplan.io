@@ -1,0 +1,36 @@
+name: Coverity
+
+on:
+  schedule:
+    - cron: '0 0 * * MON'
+
+jobs:
+  coverity:
+    if: github.repository == 'canonical/netplan'
+    runs-on: ubuntu-22.04
+
+    steps:
+      - uses: actions/checkout@v2
+      - name: Install dependencies
+        run: |
+          sudo sed -i '/deb-src/s/^# //' /etc/apt/sources.list
+          sudo apt update
+          sudo apt -y build-dep netplan.io
+          sudo apt -y install libcmocka-dev meson python3-pytest curl python3-cffi libpython3-dev
+      - name: Download Coverity
+        run: |
+          curl https://scan.coverity.com/download/cxx/linux64 --no-progress-meter --output ${HOME}/coverity.tar.gz --data "token=${{ secrets.COVERITY_TOKEN }}&project=Netplan"
+          mkdir ${HOME}/coverity
+          tar --strip=1 -C ${HOME}/coverity -xzf ${HOME}/coverity.tar.gz
+          echo "$HOME/coverity/bin" >> $GITHUB_PATH
+      - name: Run Coverity
+        run: |
+          meson setup coveritybuild --prefix=/usr
+          cov-build --dir cov-int meson compile -C coveritybuild
+          tar czf netplan.tar.gz cov-int
+      - name: Upload results
+        run: |
+          TAG=$(git describe --tags $(git rev-list --tags --max-count=1))  # find latest (stable) tag
+          REV=$(git rev-parse --short HEAD)  # get current git revision
+          VER="$TAG+git~$REV"
+          curl --form token=${{ secrets.COVERITY_TOKEN }} --form email=${{ secrets.COVERITY_EMAIL }} --form file=@netplan.tar.gz --form version="${VER}" --form description="Coverity scan" https://scan.coverity.com/builds?project=Netplan

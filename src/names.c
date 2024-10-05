@@ -49,6 +49,8 @@ netplan_def_type_to_str[NETPLAN_DEF_TYPE_MAX_] = {
     [NETPLAN_DEF_TYPE_VLAN] = "vlans",
     [NETPLAN_DEF_TYPE_VRF] = "vrfs",
     [NETPLAN_DEF_TYPE_TUNNEL] = "tunnels",
+    [NETPLAN_DEF_TYPE_DUMMY] = "dummy-devices",       /* wokeignore:rule=dummy */
+    [NETPLAN_DEF_TYPE_VETH] = "virtual-ethernets",
     [NETPLAN_DEF_TYPE_PORT] = "_ovs-ports",
     [NETPLAN_DEF_TYPE_NM] = "nm-devices",
 };
@@ -58,6 +60,9 @@ netplan_auth_key_management_type_to_str[NETPLAN_AUTH_KEY_MANAGEMENT_MAX] = {
     [NETPLAN_AUTH_KEY_MANAGEMENT_NONE] = "none",
     [NETPLAN_AUTH_KEY_MANAGEMENT_WPA_PSK] = "psk",
     [NETPLAN_AUTH_KEY_MANAGEMENT_WPA_EAP] = "eap",
+    [NETPLAN_AUTH_KEY_MANAGEMENT_WPA_EAPSHA256] = "eap-sha256",
+    [NETPLAN_AUTH_KEY_MANAGEMENT_WPA_EAPSUITE_B_192] = "eap-suite-b-192",
+    [NETPLAN_AUTH_KEY_MANAGEMENT_WPA_SAE] = "sae",
     [NETPLAN_AUTH_KEY_MANAGEMENT_8021X] = "802.1x",
 };
 
@@ -67,6 +72,8 @@ netplan_auth_eap_method_to_str[NETPLAN_AUTH_EAP_METHOD_MAX] = {
     [NETPLAN_AUTH_EAP_TLS] = "tls",
     [NETPLAN_AUTH_EAP_PEAP] = "peap",
     [NETPLAN_AUTH_EAP_TTLS] = "ttls",
+    [NETPLAN_AUTH_EAP_LEAP] = "leap",
+    [NETPLAN_AUTH_EAP_PWD] = "pwd",
 };
 
 static const char* const
@@ -81,9 +88,9 @@ netplan_tunnel_mode_to_str[NETPLAN_TUNNEL_MODE_MAX_] = {
     [NETPLAN_TUNNEL_MODE_IPIP6] = "ipip6",
     [NETPLAN_TUNNEL_MODE_IP6GRE] = "ip6gre",
     [NETPLAN_TUNNEL_MODE_VTI6] = "vti6",
-    [NETPLAN_TUNNEL_MODE_VXLAN] = "vxlan",
     [NETPLAN_TUNNEL_MODE_GRETAP] = "gretap",
     [NETPLAN_TUNNEL_MODE_IP6GRETAP] = "ip6gretap",
+    [NETPLAN_TUNNEL_MODE_VXLAN] = "vxlan",
     [NETPLAN_TUNNEL_MODE_WIREGUARD] = "wireguard",
 };
 
@@ -99,6 +106,14 @@ netplan_infiniband_mode_to_str[NETPLAN_IB_MODE_MAX_] = {
     [NETPLAN_IB_MODE_KERNEL] = NULL,
     [NETPLAN_IB_MODE_DATAGRAM] = "datagram",
     [NETPLAN_IB_MODE_CONNECTED] = "connected"
+};
+
+static const char* const
+netplan_key_flags_to_str[NETPLAN_KEY_FLAG_MAX_] = {
+    [NETPLAN_KEY_FLAG_NONE] = NULL,
+    [NETPLAN_KEY_FLAG_AGENT_OWNED] = "agent-owned",
+    [NETPLAN_KEY_FLAG_NOT_SAVED] = "not-saved",
+    [NETPLAN_KEY_FLAG_NOT_REQUIRED] = "not-required",
 };
 
 #define NAME_FUNCTION(_radical, _type) const char *netplan_ ## _radical ## _name( _type val) \
@@ -122,17 +137,18 @@ NAME_FUNCTION(tunnel_mode, NetplanTunnelMode);
 NAME_FUNCTION(addr_gen_mode, NetplanAddrGenMode);
 NAME_FUNCTION(wifi_mode, NetplanWifiMode);
 NAME_FUNCTION(infiniband_mode, NetplanInfinibandMode);
+NAME_FUNCTION(key_flags, NetplanKeyFlags);
 NAME_FUNCTION_FLAGS(vxlan_notification);
 NAME_FUNCTION_FLAGS(vxlan_checksum);
 NAME_FUNCTION_FLAGS(vxlan_extension);
 
 #define ENUM_FUNCTION(_radical, _type) _type netplan_ ## _radical ## _from_name(const char* val) \
 { \
-    for (int i = 0; i < sizeof(netplan_ ## _radical ## _to_str); ++i) { \
+    for (size_t i = 0; i < sizeof(netplan_ ## _radical ## _to_str); ++i) { \
         if (g_strcmp0(val, netplan_ ## _radical ## _to_str[i]) == 0) \
             return i; \
     } \
-    return -1; \
+    return NETPLAN_DEF_TYPE_NONE; \
 }
 
 ENUM_FUNCTION(def_type, NetplanDefType);

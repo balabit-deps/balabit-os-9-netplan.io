@@ -26,6 +26,8 @@
 
 #define SET_OPT_OUT_PTR(ptr,val) { if (ptr) *ptr = val; }
 
+#define __unused __attribute__((unused))
+
 extern GHashTable*
 wifi_frequency_24;
 
@@ -59,9 +61,6 @@ wifi_get_freq5(int channel);
 NETPLAN_ABI gchar*
 systemd_escape(char* string);
 
-NETPLAN_INTERNAL gboolean
-netplan_util_create_yaml_patch(const char* conf_obj_path, const char* obj_payload, int out_fd, GError** error);
-
 #define OPENVSWITCH_OVS_VSCTL "/usr/bin/ovs-vsctl"
 
 void
@@ -78,9 +77,6 @@ netplan_netdef_new(NetplanParser* npp, const char* id, NetplanDefType type, Netp
 
 const char *
 netplan_parser_get_filename(NetplanParser* npp);
-
-NETPLAN_INTERNAL gboolean
-netplan_parser_load_yaml_hierarchy(NetplanParser* npp, const char* rootdir, GError** error);
 
 NETPLAN_INTERNAL void
 process_input_file(const char* f);
@@ -99,6 +95,9 @@ complex_object_is_dirty(const NetplanNetDefinition* def, const void* obj, size_t
 
 gboolean
 is_multicast_address(const char*);
+
+NETPLAN_INTERNAL int
+_netplan_state_get_vf_count_for_def(const NetplanState* np_state, const NetplanNetDefinition* netdef, NetplanError** error);
 
 NETPLAN_INTERNAL gboolean
 _netplan_netdef_get_sriov_vlan_filter(const NetplanNetDefinition* netdef);
@@ -124,11 +123,59 @@ _netplan_netdef_get_vlan_id(const NetplanNetDefinition* netdef);
 NETPLAN_INTERNAL gboolean
 _netplan_netdef_is_trivial_compound_itf(const NetplanNetDefinition* netdef);
 
-NETPLAN_INTERNAL gboolean
+NETPLAN_INTERNAL gboolean //FIXME: avoid exporting private symbol
 is_route_present(const NetplanNetDefinition* netdef, const NetplanIPRoute* route);
 
-NETPLAN_INTERNAL gboolean
+NETPLAN_INTERNAL gboolean //FIXME: avoid exporting private symbol
 is_route_rule_present(const NetplanNetDefinition* netdef, const NetplanIPRule* rule);
 
-NETPLAN_INTERNAL gboolean
+NETPLAN_INTERNAL gboolean //FIXME: avoid exporting private symbol
 is_string_in_array(GArray* array, const char* value);
+
+gboolean
+_is_auth_key_management_psk(const NetplanAuthenticationSettings* auth);
+
+NETPLAN_INTERNAL struct address_iter*
+_netplan_netdef_new_address_iter(NetplanNetDefinition* netdef);
+
+NETPLAN_INTERNAL NetplanAddressOptions*
+_netplan_address_iter_next(struct address_iter* it);
+
+NETPLAN_INTERNAL void
+_netplan_address_iter_free(struct address_iter* it);
+
+NETPLAN_INTERNAL struct nameserver_iter*
+_netplan_netdef_new_nameserver_iter(NetplanNetDefinition* netdef);
+
+NETPLAN_INTERNAL char*
+_netplan_nameserver_iter_next(struct nameserver_iter* it);
+
+NETPLAN_INTERNAL void
+_netplan_nameserver_iter_free(struct nameserver_iter* it);
+
+NETPLAN_INTERNAL struct nameserver_iter*
+_netplan_netdef_new_search_domain_iter(NetplanNetDefinition* netdef);
+
+NETPLAN_INTERNAL char*
+_netplan_search_domain_iter_next(struct nameserver_iter* it);
+
+NETPLAN_INTERNAL void
+_netplan_search_domain_iter_free(struct nameserver_iter* it);
+
+NETPLAN_INTERNAL struct route_iter*
+_netplan_netdef_new_route_iter(NetplanNetDefinition* netdef);
+
+NETPLAN_INTERNAL NetplanIPRoute*
+_netplan_route_iter_next(struct route_iter* it);
+
+NETPLAN_INTERNAL void
+_netplan_route_iter_free(struct route_iter* it);
+
+NETPLAN_INTERNAL struct netdef_pertype_iter*
+_netplan_state_new_netdef_pertype_iter(NetplanState* np_state, const char* def_type);
+
+NETPLAN_INTERNAL NetplanNetDefinition*
+_netplan_netdef_pertype_iter_next(struct netdef_pertype_iter* it);
+
+NETPLAN_INTERNAL void
+_netplan_netdef_pertype_iter_free(struct netdef_pertype_iter* it);

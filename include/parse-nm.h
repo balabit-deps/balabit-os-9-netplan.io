@@ -15,6 +15,10 @@
  * along with this program.  If not, see <http://www.gnu.org/licenses/>.
  */
 
+/*! \file parse-nm.h
+ *  \brief Parsing native NetworkManager keyfile into Netplan state.
+ */
+
 #pragma once
 #include "types.h"
 
@@ -22,6 +26,10 @@
 
 NETPLAN_PUBLIC gboolean
 netplan_parser_load_keyfile(NetplanParser* npp, const char* filename, NetplanError** error);
+
+//TODO: needs to be implemented
+//NETPLAN_PUBLIC gboolean
+//netplan_parser_load_keyfile_from_fd(NetplanParser* npp, int input_fd, NetplanError** error);
 
 /********** Old API below this ***********/
 

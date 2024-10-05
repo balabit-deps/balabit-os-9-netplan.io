@@ -33,6 +33,7 @@ BuildRequires:  pkgconfig(systemd)
 BuildRequires:  pkgconfig(yaml-0.1)
 BuildRequires:  pkgconfig(uuid)
 BuildRequires:  python3-devel
+BuildRequires:  python3-cffi
 BuildRequires:  systemd-rpm-macros
 BuildRequires:  %{_bindir}/pandoc
 BuildRequires:  %{_bindir}/find
@@ -40,12 +41,15 @@ BuildRequires:  %{_bindir}/find
 BuildRequires:  %{_sbindir}/ip
 BuildRequires:  pkgconfig(cmocka)
 BuildRequires:  python3dist(coverage)
+BuildRequires:  dbus-x11
 BuildRequires:  python3dist(netifaces)
 BuildRequires:  python3dist(pycodestyle)
 BuildRequires:  python3dist(pyflakes)
 BuildRequires:  python3dist(pytest)
+BuildRequires:  python3dist(pytest-cov)
 BuildRequires:  python3dist(pyyaml)
 BuildRequires:  python3dist(rich)
+BuildRequires:  %{_bindir}/ovs-vsctl
 
 # /usr/sbin/netplan is a Python 3 script that requires Python modules
 Requires:       python3dist(netifaces)
@@ -90,6 +94,8 @@ Currently supported backends are NetworkManager and systemd-networkd.
 %dir %{_prefix}/lib/%{name}
 %{_libexecdir}/%{name}/
 %{_datadir}/bash-completion/completions/%{name}
+%{python3_sitelib}/%{name}/
+%{python3_sitearch}/%{name}/
 
 # ------------------------------------------------------------------------------------------------
 
@@ -215,6 +221,9 @@ sed -e "s/werror=true/werror=false/g" -i meson.build
 rm -f %{buildroot}/lib/netplan/generate
 rmdir %{buildroot}/lib/netplan
 rmdir %{buildroot}/lib
+
+# Remove superfluous __pycache__
+rm -rf %{buildroot}/usr/lib/python3.11/site-packages/netplan/__pycache__
 
 # Pre-create the config directories
 mkdir -p %{buildroot}%{_sysconfdir}/%{name}

@@ -13,10 +13,10 @@ name: "CodeQL"
 
 on:
   push:
-    branches: [ main, 'stable/**' ]
+    branches: [ main ]
   pull_request:
     # The branches below must be a subset of the branches above
-    branches: [ main, 'stable/**' ]
+    branches: [ main ]
   schedule:
     - cron: '17 21 * * 2'
 
@@ -52,7 +52,7 @@ jobs:
       run: |
         sudo sed -i '/deb-src/s/^# //' /etc/apt/sources.list
         sudo apt update
-        sudo apt install meson python3-coverage python3-pytest python3-pytest-cov libcmocka-dev
+        sudo apt install meson python3-coverage python3-pytest python3-pytest-cov libcmocka-dev python3-cffi libpython3-dev
         sudo apt build-dep netplan.io
 
     # Autobuild attempts to build any compiled languages  (C/C++, C#, or Java).

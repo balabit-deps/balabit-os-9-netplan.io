@@ -59,7 +59,7 @@ free_hashtable_with_destructor(GHashTable** hash, void (destructor)(void *)) {
     }
 }
 
-static void
+void
 free_address_options(void* ptr)
 {
     NetplanAddressOptions* opts = ptr;
@@ -107,6 +107,7 @@ reset_auth_settings(NetplanAuthenticationSettings* auth)
     FREE_AND_NULLIFY(auth->identity);
     FREE_AND_NULLIFY(auth->anonymous_identity);
     FREE_AND_NULLIFY(auth->password);
+    FREE_AND_NULLIFY(auth->psk);
     FREE_AND_NULLIFY(auth->ca_certificate);
     FREE_AND_NULLIFY(auth->client_certificate);
     FREE_AND_NULLIFY(auth->client_key);
@@ -114,6 +115,7 @@ reset_auth_settings(NetplanAuthenticationSettings* auth)
     FREE_AND_NULLIFY(auth->phase2_auth);
     auth->key_management = NETPLAN_AUTH_KEY_MANAGEMENT_NONE;
     auth->eap_method = NETPLAN_AUTH_EAP_NONE;
+    auth->pmf_mode = NETPLAN_AUTH_PMF_MODE_NONE;
 }
 
 void
@@ -152,7 +154,7 @@ reset_dhcp_overrides(NetplanDHCPOverrides* overrides)
 void
 reset_ip_rule(NetplanIPRule* ip_rule)
 {
-    ip_rule->family = G_MAXUINT; /* 0 is a valid family ID */
+    ip_rule->family = -1; /* 0 is a valid family ID */
     ip_rule->priority = NETPLAN_IP_RULE_PRIO_UNSPEC;
     ip_rule->table = NETPLAN_ROUTE_TABLE_UNSPEC;
     ip_rule->tos = NETPLAN_IP_RULE_TOS_UNSPEC;
@@ -200,8 +202,8 @@ reset_vxlan(NetplanVxlan* vxlan)
  * @data: pointer to a NetplanBackend value representing the renderer context in which
  *        to interpret the processed object, especially regarding the backend settings
  */
-static void
-free_access_point(void* key, void* value, void* data)
+void
+free_access_point(__unused void* key, void* value, __unused void* data)
 {
     NetplanWifiAccessPoint* ap = value;
     g_free(ap->ssid);
@@ -354,14 +356,6 @@ reset_netdef(NetplanNetDefinition* netdef, NetplanDefType new_type, NetplanBacke
     FREE_AND_NULLIFY(netdef->activation_mode);
     netdef->ignore_carrier = FALSE;
 
-    netdef->receive_checksum_offload = FALSE;
-    netdef->transmit_checksum_offload = FALSE;
-    netdef->tcp_segmentation_offload = FALSE;
-    netdef->tcp6_segmentation_offload = FALSE;
-    netdef->generic_segmentation_offload = FALSE;
-    netdef->generic_receive_offload = FALSE;
-    netdef->large_receive_offload = FALSE;
-
     reset_private_netdef_data(netdef->_private);
     FREE_AND_NULLIFY(netdef->_private);
 
@@ -374,6 +368,10 @@ reset_netdef(NetplanNetDefinition* netdef, NetplanDefType new_type, NetplanBacke
     netdef->large_receive_offload = NETPLAN_TRISTATE_UNSET;
 
     netdef->ib_mode = NETPLAN_IB_MODE_KERNEL;
+
+    netdef->tunnel_private_key_flags = NETPLAN_KEY_FLAG_NONE;
+
+    netdef->veth_peer_link = NULL;
 }
 
 void

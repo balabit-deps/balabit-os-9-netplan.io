@@ -340,6 +340,28 @@ route2=4:5:6:7:8:9:0:1/63,,5
           proxy._: ""
 '''.format(UUID, UUID)})
 
+    def test_keyfile_dummy(self):       # wokeignore:rule=dummy
+        self.generate_from_keyfile('''[connection]
+id=Test
+uuid={}
+type={}
+
+[ipv4]
+method=manual
+address1=192.168.123.123/24
+'''.format(UUID, 'dummy'))      # wokeignore:rule=dummy
+        self.assert_netplan({UUID: '''network:
+  version: 2
+  dummy-devices:            # wokeignore:rule=dummy
+    NM-{}:
+      renderer: NetworkManager
+      addresses:
+      - "192.168.123.123/24"
+      networkmanager:
+        uuid: "{}"
+        name: "Test"
+'''.format(UUID, UUID)})
+
     def _template_keyfile_type(self, nd_type, nm_type, supported=True):
         self.maxDiff = None
         file = os.path.join(self.workdir.name, 'tmp/some.keyfile')
@@ -378,17 +400,8 @@ route2=4:5:6:7:8:9:0:1/63,,5
     def test_keyfile_type_bond(self):
         self._template_keyfile_type('bonds', 'bond')
 
-    def test_keyfile_type_vlan(self):
-        self._template_keyfile_type('nm-devices', 'vlan', False)
-
     def test_keyfile_type_tunnel(self):
-        self._template_keyfile_type('nm-devices', 'ip-tunnel', False)
-
-    def test_keyfile_type_wireguard(self):
-        self._template_keyfile_type('nm-devices', 'wireguard', False)
-
-    def test_keyfile_type_other(self):
-        self._template_keyfile_type('nm-devices', 'dummy', False)  # wokeignore:rule=dummy
+        self._template_keyfile_type('tunnels', 'ip-tunnel', False)
 
     def test_keyfile_type_wifi(self):
         self.generate_from_keyfile('''[connection]
@@ -512,6 +525,208 @@ dns-search='''.format(UUID, method))
 
     def test_keyfile_type_wifi_eap_ttls(self):
         self._template_keyfile_type_wifi_eap('ttls')
+
+    def test_keyfile_type_wifi_eap_leap(self):
+        self._template_keyfile_type_wifi_eap('leap')
+
+    def test_keyfile_type_wifi_eap_pwd(self):
+        self._template_keyfile_type_wifi_eap('pwd')
+
+    def test_keyfile_wifi_eap_leap(self):
+        self.generate_from_keyfile('''[connection]
+type=wifi
+uuid={}
+permissions=
+id=myid with spaces
+interface-name=eth0
+
+[wifi]
+ssid=SOME-SSID
+mode=infrastructure
+
+[wifi-security]
+key-mgmt=ieee8021x
+
+[802-1x]
+eap=leap
+identity=some-id
+password=v3rys3cr3t!
+
+[ipv4]
+method=auto'''.format(UUID))
+        self.assert_netplan({UUID: '''network:
+  version: 2
+  wifis:
+    NM-{}:
+      renderer: NetworkManager
+      match:
+        name: "eth0"
+      dhcp4: true
+      access-points:
+        "SOME-SSID":
+          auth:
+            key-management: "802.1x"
+            method: "leap"
+            identity: "some-id"
+            password: "v3rys3cr3t!"
+          networkmanager:
+            uuid: "{}"
+            name: "myid with spaces"
+            passthrough:
+              connection.permissions: ""
+      networkmanager:
+        uuid: "{}"
+        name: "myid with spaces"
+'''.format(UUID, UUID, UUID)})
+
+    def test_keyfile_wifi_eap_pwd(self):
+        self.generate_from_keyfile('''[connection]
+type=wifi
+uuid={}
+permissions=
+id=myid with spaces
+interface-name=eth0
+
+[wifi]
+ssid=SOME-SSID
+mode=infrastructure
+
+[wifi-security]
+key-mgmt=ieee8021x
+
+[802-1x]
+eap=pwd
+identity=some-id
+password=v3rys3cr3t!
+
+[ipv4]
+method=auto'''.format(UUID))
+        self.assert_netplan({UUID: '''network:
+  version: 2
+  wifis:
+    NM-{}:
+      renderer: NetworkManager
+      match:
+        name: "eth0"
+      dhcp4: true
+      access-points:
+        "SOME-SSID":
+          auth:
+            key-management: "802.1x"
+            method: "pwd"
+            identity: "some-id"
+            password: "v3rys3cr3t!"
+          networkmanager:
+            uuid: "{}"
+            name: "myid with spaces"
+            passthrough:
+              connection.permissions: ""
+      networkmanager:
+        uuid: "{}"
+        name: "myid with spaces"
+'''.format(UUID, UUID, UUID)})
+
+    def test_keyfile_wifi_eap_md5_not_supported(self):
+        self.generate_from_keyfile('''[connection]
+type=wifi
+uuid={}
+permissions=
+id=myid with spaces
+interface-name=eth0
+
+[wifi]
+ssid=SOME-SSID
+mode=infrastructure
+
+[wifi-security]
+key-mgmt=ieee8021x
+
+[802-1x]
+eap=md5
+identity=some-id
+password=v3rys3cr3t!
+
+[ipv4]
+method=auto'''.format(UUID))
+        self.assert_netplan({UUID: '''network:
+  version: 2
+  wifis:
+    NM-{}:
+      renderer: NetworkManager
+      match:
+        name: "eth0"
+      dhcp4: true
+      access-points:
+        "SOME-SSID":
+          auth:
+            key-management: "802.1x"
+            identity: "some-id"
+            password: "v3rys3cr3t!"
+          networkmanager:
+            uuid: "{}"
+            name: "myid with spaces"
+            passthrough:
+              connection.permissions: ""
+              802-1x.eap: "md5"
+      networkmanager:
+        uuid: "{}"
+        name: "myid with spaces"
+'''.format(UUID, UUID, UUID)})
+
+    def test_keyfile_wifi_eap_psk_with_eap(self):
+        self.generate_from_keyfile('''[connection]
+type=wifi
+uuid={}
+permissions=
+id=myid with spaces
+interface-name=eth0
+
+[wifi]
+ssid=SOME-SSID
+mode=infrastructure
+
+[wifi-security]
+key-mgmt=wpa-eap
+psk=pskpassword
+
+[802-1x]
+eap=leap
+identity=some-id
+password=v3rys3cr3t!
+
+[ipv4]
+method=auto'''.format(UUID), regenerate=False)
+        # Regeneration is disabled for the previous test because when both,
+        # identity and PSK passwords are used, the PSK will be stored in the
+        # access-points.<ap>.password key and, because of that, a keyfile with
+        # [wifi-security].pmf=2 will be emitted and will differ from the original
+        # keyfile.
+
+        self.assert_netplan({UUID: '''network:
+  version: 2
+  wifis:
+    NM-{}:
+      renderer: NetworkManager
+      match:
+        name: "eth0"
+      dhcp4: true
+      access-points:
+        "SOME-SSID":
+          password: "pskpassword"
+          auth:
+            key-management: "eap"
+            method: "leap"
+            identity: "some-id"
+            password: "v3rys3cr3t!"
+          networkmanager:
+            uuid: "{}"
+            name: "myid with spaces"
+            passthrough:
+              connection.permissions: ""
+      networkmanager:
+        uuid: "{}"
+        name: "myid with spaces"
+'''.format(UUID, UUID, UUID)})
 
     def _template_keyfile_type_wifi(self, nd_mode, nm_mode):
         self.generate_from_keyfile('''[connection]
@@ -808,20 +1023,18 @@ method=ignore
 '''.format(UUID))
         self.assert_netplan({UUID: '''network:
   version: 2
-  nm-devices:
+  vlans:
     NM-{}:
       renderer: NetworkManager
+      addresses:
+      - "1.2.3.4/24"
+      id: 1
+      link: "en1"
       networkmanager:
         uuid: "{}"
         name: "netplan-enblue"
         passthrough:
-          connection.type: "vlan"
           connection.interface-name: "enblue"
-          vlan.id: "1"
-          vlan.parent: "en1"
-          ipv4.method: "manual"
-          ipv4.address1: "1.2.3.4/24"
-          ipv6.method: "ignore"
 '''.format(UUID, UUID)})
 
     def test_keyfile_bridge(self):
@@ -1180,25 +1393,25 @@ method=auto
 '''.format(UUID))
         self.assert_netplan({UUID: '''network:
   version: 2
-  nm-devices:
+  tunnels:
     NM-{}:
       renderer: NetworkManager
+      dhcp4: true
+      dhcp6: true
+      ipv6-address-generation: "stable-privacy"
+      mode: "gre"
+      local: "10.20.20.1"
+      remote: "10.20.20.2"
       networkmanager:
         uuid: "{}"
         name: "IP tunnel connection 1"
         passthrough:
-          connection.type: "ip-tunnel"
           connection.autoconnect: "false"
           connection.interface-name: "gre10"
           connection.permissions: ""
-          ip-tunnel.local: "10.20.20.1"
-          ip-tunnel.mode: "2"
-          ip-tunnel.remote: "10.20.20.2"
           ipv4.dns-search: ""
-          ipv4.method: "auto"
-          ipv6.addr-gen-mode: "stable-privacy"
           ipv6.dns-search: ""
-          ipv6.method: "auto"
+          ipv6.ip6-privacy: "-1"
           proxy._: ""
 '''.format(UUID, UUID)})
 
@@ -1248,6 +1461,7 @@ ssid=ubuntu-wpa2-wpa3-mixed
 [wifi-security]
 key-mgmt=sae
 psk=test1234
+pmf=3
 
 [ipv4]
 method=auto
@@ -1271,13 +1485,142 @@ method=auto
       access-points:
         "ubuntu-wpa2-wpa3-mixed":
           auth:
-            key-management: "none"
+            key-management: "sae"
             password: "test1234"
           networkmanager:
             uuid: "ff9d6ebc-226d-4f82-a485-b7ff83b9607f"
             name: "test2"
             passthrough:
-              wifi-security.key-mgmt: "sae"
+              ipv6.ip6-privacy: "-1"
+              proxy._: ""
+      networkmanager:
+        uuid: "{}"
+        name: "test2"
+'''.format(UUID, UUID)})
+
+    def test_keyfile_wpa3_enterprise_eap_sha256(self):
+        self.generate_from_keyfile('''[connection]
+id=test2
+uuid={}
+type=wifi
+interface-name=wlan0
+
+[wifi]
+mode=infrastructure
+ssid=enterprisenet
+
+[wifi-security]
+key-mgmt=wpa-eap
+pmf=2
+
+[802-1x]
+eap=tls
+identity=cert-joe@cust.example.com
+anonymous-identity=@cust.example.com
+ca-cert=/etc/ssl/cust-cacrt.pem
+client-cert=/etc/ssl/cust-crt.pem
+private-key=/etc/ssl/cust-key.pem
+private-key-password=**********
+
+[ipv4]
+method=auto
+
+[ipv6]
+addr-gen-mode=stable-privacy
+method=auto
+
+[proxy]
+'''.format(UUID))
+        self.assert_netplan({UUID: '''network:
+  version: 2
+  wifis:
+    NM-{}:
+      renderer: NetworkManager
+      match:
+        name: "wlan0"
+      dhcp4: true
+      dhcp6: true
+      ipv6-address-generation: "stable-privacy"
+      access-points:
+        "enterprisenet":
+          auth:
+            key-management: "eap-sha256"
+            method: "tls"
+            anonymous-identity: "@cust.example.com"
+            identity: "cert-joe@cust.example.com"
+            ca-certificate: "/etc/ssl/cust-cacrt.pem"
+            client-certificate: "/etc/ssl/cust-crt.pem"
+            client-key: "/etc/ssl/cust-key.pem"
+            client-key-password: "**********"
+          networkmanager:
+            uuid: "ff9d6ebc-226d-4f82-a485-b7ff83b9607f"
+            name: "test2"
+            passthrough:
+              ipv6.ip6-privacy: "-1"
+              proxy._: ""
+      networkmanager:
+        uuid: "{}"
+        name: "test2"
+'''.format(UUID, UUID)})
+
+    def test_keyfile_wpa3_enterprise_eap_suite_b_192(self):
+        self.generate_from_keyfile('''[connection]
+id=test2
+uuid={}
+type=wifi
+interface-name=wlan0
+
+[wifi]
+mode=infrastructure
+ssid=enterprisenet
+
+[wifi-security]
+key-mgmt=wpa-eap-suite-b-192
+pmf=3
+
+[802-1x]
+eap=tls
+identity=cert-joe@cust.example.com
+anonymous-identity=@cust.example.com
+ca-cert=/etc/ssl/cust-cacrt.pem
+client-cert=/etc/ssl/cust-crt.pem
+private-key=/etc/ssl/cust-key.pem
+private-key-password=**********
+
+[ipv4]
+method=auto
+
+[ipv6]
+addr-gen-mode=stable-privacy
+method=auto
+
+[proxy]
+'''.format(UUID))
+        self.assert_netplan({UUID: '''network:
+  version: 2
+  wifis:
+    NM-{}:
+      renderer: NetworkManager
+      match:
+        name: "wlan0"
+      dhcp4: true
+      dhcp6: true
+      ipv6-address-generation: "stable-privacy"
+      access-points:
+        "enterprisenet":
+          auth:
+            key-management: "eap-suite-b-192"
+            method: "tls"
+            anonymous-identity: "@cust.example.com"
+            identity: "cert-joe@cust.example.com"
+            ca-certificate: "/etc/ssl/cust-cacrt.pem"
+            client-certificate: "/etc/ssl/cust-crt.pem"
+            client-key: "/etc/ssl/cust-key.pem"
+            client-key-password: "**********"
+          networkmanager:
+            uuid: "ff9d6ebc-226d-4f82-a485-b7ff83b9607f"
+            name: "test2"
+            passthrough:
               ipv6.ip6-privacy: "-1"
               proxy._: ""
       networkmanager:
@@ -1491,3 +1834,515 @@ method=auto\n'''.format(UUID))
         uuid: "{}"
         name: "MyWifi"
 '''.format(UUID, UUID, UUID)})
+
+    def test_simple_wireguard(self):
+        self.generate_from_keyfile('''[connection]
+id=wg0
+type=wireguard
+uuid={}
+interface-name=wg0
+
+[ipv4]
+method=auto\n'''.format(UUID))
+        self.assert_netplan({UUID: '''network:
+  version: 2
+  tunnels:
+    NM-{}:
+      renderer: NetworkManager
+      dhcp4: true
+      mode: "wireguard"
+      networkmanager:
+        uuid: "{}"
+        name: "wg0"
+        passthrough:
+          connection.interface-name: "wg0"
+'''.format(UUID, UUID)})
+
+    def test_wireguard_with_key(self):
+        self.generate_from_keyfile('''[connection]
+id=wg0
+type=wireguard
+uuid={}
+interface-name=wg0
+
+[wireguard]
+private-key=aPUcp5vHz8yMLrzk8SsDyYnV33IhE/k20e52iKJFV0A=
+
+[ipv4]
+method=auto\n'''.format(UUID))
+        self.assert_netplan({UUID: '''network:
+  version: 2
+  tunnels:
+    NM-{}:
+      renderer: NetworkManager
+      dhcp4: true
+      mode: "wireguard"
+      keys:
+        private: "aPUcp5vHz8yMLrzk8SsDyYnV33IhE/k20e52iKJFV0A="
+      networkmanager:
+        uuid: "{}"
+        name: "wg0"
+        passthrough:
+          connection.interface-name: "wg0"
+'''.format(UUID, UUID)})
+
+    def test_wireguard_with_key_and_peer(self):
+        self.generate_from_keyfile('''[connection]
+id=wg0
+type=wireguard
+uuid={}
+interface-name=wg0
+
+[wireguard]
+private-key=aPUcp5vHz8yMLrzk8SsDyYnV33IhE/k20e52iKJFV0A=
+
+[wireguard-peer.cwkb7k0xDgLSnunZpFIjLJw4u+mJDDr+aBR5DqzpmgI=]
+endpoint=1.2.3.4:12345
+allowed-ips=192.168.0.0/24;
+
+[ipv4]
+method=auto\n'''.format(UUID))
+        self.assert_netplan({UUID: '''network:
+  version: 2
+  tunnels:
+    NM-{}:
+      renderer: NetworkManager
+      dhcp4: true
+      mode: "wireguard"
+      keys:
+        private: "aPUcp5vHz8yMLrzk8SsDyYnV33IhE/k20e52iKJFV0A="
+      peers:
+      - endpoint: "1.2.3.4:12345"
+        keys:
+          public: "cwkb7k0xDgLSnunZpFIjLJw4u+mJDDr+aBR5DqzpmgI="
+        allowed-ips:
+        - "192.168.0.0/24"
+      networkmanager:
+        uuid: "{}"
+        name: "wg0"
+        passthrough:
+          connection.interface-name: "wg0"
+'''.format(UUID, UUID)})
+
+    def test_wireguard_with_empty_endpoint(self):
+        self.generate_from_keyfile('''[connection]
+id=wg0
+type=wireguard
+uuid={}
+interface-name=wg0
+
+[wireguard]
+private-key=aPUcp5vHz8yMLrzk8SsDyYnV33IhE/k20e52iKJFV0A=
+
+[wireguard-peer.cwkb7k0xDgLSnunZpFIjLJw4u+mJDDr+aBR5DqzpmgI=]
+endpoint=
+allowed-ips=192.168.0.0/24;
+
+[ipv4]
+method=auto\n'''.format(UUID), regenerate=False)
+        self.assert_netplan({UUID: '''network:
+  version: 2
+  tunnels:
+    NM-{}:
+      renderer: NetworkManager
+      dhcp4: true
+      mode: "wireguard"
+      keys:
+        private: "aPUcp5vHz8yMLrzk8SsDyYnV33IhE/k20e52iKJFV0A="
+      peers:
+      - keys:
+          public: "cwkb7k0xDgLSnunZpFIjLJw4u+mJDDr+aBR5DqzpmgI="
+        allowed-ips:
+        - "192.168.0.0/24"
+      networkmanager:
+        uuid: "{}"
+        name: "wg0"
+        passthrough:
+          connection.interface-name: "wg0"
+'''.format(UUID, UUID)})
+
+    def test_wireguard_allowed_ips_without_prefix(self):
+        '''
+        When the IP prefix is not present we should default to /32
+        '''
+        self.generate_from_keyfile('''[connection]
+id=wg0
+type=wireguard
+uuid={}
+interface-name=wg0
+
+[wireguard]
+private-key=aPUcp5vHz8yMLrzk8SsDyYnV33IhE/k20e52iKJFV0A=
+
+[wireguard-peer.cwkb7k0xDgLSnunZpFIjLJw4u+mJDDr+aBR5DqzpmgI=]
+endpoint=1.2.3.4:12345
+allowed-ips=192.168.0.10
+
+[ipv4]
+method=auto\n'''.format(UUID), regenerate=False)
+        self.assert_netplan({UUID: '''network:
+  version: 2
+  tunnels:
+    NM-{}:
+      renderer: NetworkManager
+      dhcp4: true
+      mode: "wireguard"
+      keys:
+        private: "aPUcp5vHz8yMLrzk8SsDyYnV33IhE/k20e52iKJFV0A="
+      peers:
+      - endpoint: "1.2.3.4:12345"
+        keys:
+          public: "cwkb7k0xDgLSnunZpFIjLJw4u+mJDDr+aBR5DqzpmgI="
+        allowed-ips:
+        - "192.168.0.10/32"
+      networkmanager:
+        uuid: "{}"
+        name: "wg0"
+        passthrough:
+          connection.interface-name: "wg0"
+'''.format(UUID, UUID)})
+
+    def test_wireguard_with_key_flags(self):
+        self.generate_from_keyfile('''[connection]
+id=wg0
+type=wireguard
+uuid={}
+interface-name=wg0
+
+[wireguard]
+listen-port=51820
+private-key-flags=1
+
+[wireguard-peer.M9nt4YujIOmNrRmpIRTmYSfMdrpvE7u6WkG8FY8WjG4=]
+endpoint=10.20.30.40:51820
+allowed-ips=0.0.0.0/0;
+
+[ipv4]
+method=auto\n'''.format(UUID))
+        self.assert_netplan({UUID: '''network:
+  version: 2
+  tunnels:
+    NM-{}:
+      renderer: NetworkManager
+      dhcp4: true
+      mode: "wireguard"
+      port: 51820
+      keys:
+        private-key-flags:
+        - agent-owned
+      peers:
+      - endpoint: "10.20.30.40:51820"
+        keys:
+          public: "M9nt4YujIOmNrRmpIRTmYSfMdrpvE7u6WkG8FY8WjG4="
+        allowed-ips:
+        - "0.0.0.0/0"
+      networkmanager:
+        uuid: "{}"
+        name: "wg0"
+        passthrough:
+          connection.interface-name: "wg0"
+'''.format(UUID, UUID)})
+
+    def test_wireguard_with_key_all_flags_enabled(self):
+        self.generate_from_keyfile('''[connection]
+id=wg0
+type=wireguard
+uuid={}
+interface-name=wg0
+
+[wireguard]
+listen-port=51820
+private-key-flags=7
+
+[wireguard-peer.M9nt4YujIOmNrRmpIRTmYSfMdrpvE7u6WkG8FY8WjG4=]
+endpoint=10.20.30.40:51820
+allowed-ips=0.0.0.0/0;
+
+[ipv4]
+method=auto\n'''.format(UUID))
+        self.assert_netplan({UUID: '''network:
+  version: 2
+  tunnels:
+    NM-{}:
+      renderer: NetworkManager
+      dhcp4: true
+      mode: "wireguard"
+      port: 51820
+      keys:
+        private-key-flags:
+        - agent-owned
+        - not-saved
+        - not-required
+      peers:
+      - endpoint: "10.20.30.40:51820"
+        keys:
+          public: "M9nt4YujIOmNrRmpIRTmYSfMdrpvE7u6WkG8FY8WjG4="
+        allowed-ips:
+        - "0.0.0.0/0"
+      networkmanager:
+        uuid: "{}"
+        name: "wg0"
+        passthrough:
+          connection.interface-name: "wg0"
+'''.format(UUID, UUID)})
+
+    def test_wireguard_with_key_and_peer_without_allowed_ips(self):
+        self.generate_from_keyfile('''[connection]
+id=wg0
+type=wireguard
+uuid={}
+interface-name=wg0
+
+[wireguard]
+private-key=aPUcp5vHz8yMLrzk8SsDyYnV33IhE/k20e52iKJFV0A=
+
+[wireguard-peer.cwkb7k0xDgLSnunZpFIjLJw4u+mJDDr+aBR5DqzpmgI=]
+endpoint=1.2.3.4:12345
+
+[ipv4]
+method=auto\n'''.format(UUID))
+        self.assert_netplan({UUID: '''network:
+  version: 2
+  tunnels:
+    NM-{}:
+      renderer: NetworkManager
+      dhcp4: true
+      mode: "wireguard"
+      keys:
+        private: "aPUcp5vHz8yMLrzk8SsDyYnV33IhE/k20e52iKJFV0A="
+      peers:
+      - endpoint: "1.2.3.4:12345"
+        keys:
+          public: "cwkb7k0xDgLSnunZpFIjLJw4u+mJDDr+aBR5DqzpmgI="
+      networkmanager:
+        uuid: "{}"
+        name: "wg0"
+        passthrough:
+          connection.interface-name: "wg0"
+'''.format(UUID, UUID)})
+
+    def test_vxlan_with_local_and_remote(self):
+        self.generate_from_keyfile('''[connection]
+id=vxlan10
+type=vxlan
+uuid={}
+interface-name=vxlan10
+
+[vxlan]
+id=10
+local=198.51.100.2
+remote=203.0.113.1
+
+[ipv4]
+method=auto\n'''.format(UUID))
+        self.assert_netplan({UUID: '''network:
+  version: 2
+  tunnels:
+    NM-{}:
+      renderer: NetworkManager
+      dhcp4: true
+      mode: "vxlan"
+      local: "198.51.100.2"
+      remote: "203.0.113.1"
+      id: 10
+      networkmanager:
+        uuid: "{}"
+        name: "vxlan10"
+        passthrough:
+          connection.interface-name: "vxlan10"
+'''.format(UUID, UUID)})
+
+    def test_simple_vxlan(self):
+        self.generate_from_keyfile('''[connection]
+id=vxlan10
+type=vxlan
+uuid={}
+interface-name=vxlan10
+
+[vxlan]
+id=10
+
+[ipv4]
+method=auto\n'''.format(UUID))
+        self.assert_netplan({UUID: '''network:
+  version: 2
+  tunnels:
+    NM-{}:
+      renderer: NetworkManager
+      dhcp4: true
+      mode: "vxlan"
+      id: 10
+      networkmanager:
+        uuid: "{}"
+        name: "vxlan10"
+        passthrough:
+          connection.interface-name: "vxlan10"
+'''.format(UUID, UUID)})
+
+    def test_invalid_tunnel_mode(self):
+        out = self.generate_from_keyfile('''[connection]
+id=tun0
+type=ip-tunnel
+uuid={}
+interface-name=tun0
+
+[ip-tunnel]
+mode=42
+
+[ipv4]
+method=auto\n'''.format(UUID), expect_fail=True)
+
+        self.assertIn('missing or invalid \'mode\' property for tunnel', out)
+
+    def test_keyfile_wifi_random_cloned_mac_address(self):
+        self.generate_from_keyfile('''[connection]
+type=wifi
+uuid={}
+id=myid with spaces
+interface-name=eth0
+
+[wifi]
+ssid=SOME-SSID
+mode=infrastructure
+cloned-mac-address=random
+
+[wifi-security]
+key-mgmt=ieee8021x
+
+[ipv4]
+method=auto
+dns-search='''.format(UUID))
+        self.assert_netplan({UUID: '''network:
+  version: 2
+  wifis:
+    NM-{}:
+      renderer: NetworkManager
+      match:
+        name: "eth0"
+      dhcp4: true
+      access-points:
+        "SOME-SSID":
+          auth:
+            key-management: "802.1x"
+          networkmanager:
+            uuid: "{}"
+            name: "myid with spaces"
+            passthrough:
+              wifi.cloned-mac-address: "random"
+              ipv4.dns-search: ""
+      networkmanager:
+        uuid: "{}"
+        name: "myid with spaces"
+'''.format(UUID, UUID, UUID)})
+
+    def test_keyfile_ethernet_random_cloned_mac_address(self):
+        self.generate_from_keyfile('''[connection]
+type=ethernet
+uuid={}
+id=myid with spaces
+interface-name=eth0
+
+[ethernet]
+cloned-mac-address=random
+
+[ipv4]
+method=auto
+dns-search='''.format(UUID))
+        self.assert_netplan({UUID: '''network:
+  version: 2
+  ethernets:
+    NM-{}:
+      renderer: NetworkManager
+      match:
+        name: "eth0"
+      dhcp4: true
+      wakeonlan: true
+      networkmanager:
+        uuid: "{}"
+        name: "myid with spaces"
+        passthrough:
+          ethernet.cloned-mac-address: "random"
+          ipv4.dns-search: ""
+'''.format(UUID, UUID)})
+
+    def test_veth_pair(self):
+        self.generate_from_keyfile('''[connection]
+id=veth-peer1
+uuid={}
+type=veth
+interface-name=veth-peer1
+
+[veth]
+peer=veth-peer2
+
+[ipv4]
+method=auto\n'''.format(UUID))
+        self.assert_netplan({UUID: '''network:
+  version: 2
+  virtual-ethernets:
+    NM-{}:
+      renderer: NetworkManager
+      dhcp4: true
+      peer: "veth-peer2"
+      networkmanager:
+        uuid: "{}"
+        name: "veth-peer1"
+        passthrough:
+          connection.interface-name: "veth-peer1"
+'''.format(UUID, UUID)})
+
+    def test_veth_without_peer(self):
+        self.generate_from_keyfile('''[connection]
+id=veth-peer1
+uuid={}
+type=veth
+interface-name=veth-peer1
+
+[ipv4]
+method=auto\n'''.format(UUID), expect_fail=True)
+
+    def test_vrf_basic(self):
+        self.generate_from_keyfile('''[connection]
+id=vrf0
+uuid={}
+type=vrf
+interface-name=vrf0
+
+[vrf]
+table=1000
+
+[ipv4]
+route1=10.10.0.0/16,10.10.10.1
+route1_options=table=1000
+method=link-local\n'''.format(UUID))
+        self.assert_netplan({UUID: '''network:
+  version: 2
+  vrfs:
+    NM-{}:
+      renderer: NetworkManager
+      routes:
+      - to: "10.10.0.0/16"
+        via: "10.10.10.1"
+      table: 1000
+      networkmanager:
+        uuid: "{}"
+        name: "vrf0"
+        passthrough:
+          connection.interface-name: "vrf0"
+'''.format(UUID, UUID)})
+
+    def test_vrf_without_table_should_fail(self):
+        out = self.generate_from_keyfile('''[connection]
+id=vrf0
+uuid={}
+type=vrf
+interface-name=vrf0
+
+[vrf]
+
+[ipv4]
+route1=10.10.0.0/16,10.10.10.1
+route1_options=table=1000
+method=link-local\n'''.format(UUID), expect_fail=True)
+
+        self.assertIn('missing \'table\' property', out)
